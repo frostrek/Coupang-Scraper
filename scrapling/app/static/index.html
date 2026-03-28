@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DataHarvest — E-Commerce Scraper</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&family=DM+Sans:ital,wght@0,300;0,400;0,500;1,300&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #08090d;
+    --surface: #0f1117;
+    --surface2: #161822;
+    --border: #1e2030;
+    --border2: #262840;
+    --accent: #6C63FF;
+    --accent2: #8B5CF6;
+    --teal: #00D4AA;
+    --teal2: #00B894;
+    --orange: #FF6B35;
+    --text: #E8EAF6;
+    --text2: #9094B4;
+    --text3: #555875;
+    --success: #00D4AA;
+    --error: #FF4C6A;
+    --warning: #FFB833;
+    --glow: rgba(108, 99, 255, 0.15);
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ─── NOISE OVERLAY ─── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ─── GLOW BLOBS ─── */
+  .blob {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(120px);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.18;
+  }
+  .blob-1 { width: 600px; height: 600px; background: var(--accent); top: -200px; left: -200px; }
+  .blob-2 { width: 400px; height: 400px; background: var(--teal); bottom: -100px; right: -100px; }
+  .blob-3 { width: 300px; height: 300px; background: var(--orange); top: 40%; left: 60%; }
+
+  /* ─── LAYOUT ─── */
+  .wrap { position: relative; z-index: 1; max-width: 860px; margin: 0 auto; padding: 0 24px 80px; }
+
+  /* ─── HEADER ─── */
+  header {
+    padding: 48px 0 40px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+
+  .logo-icon {
+    width: 52px; height: 52px;
+    background: linear-gradient(135deg, var(--accent), var(--teal));
+    border-radius: 14px;
+    display: grid;
+    place-items: center;
+    font-size: 22px;
+    flex-shrink: 0;
+    box-shadow: 0 0 30px rgba(108,99,255,0.4);
+  }
+
+  .header-text h1 {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 28px;
+    letter-spacing: -0.5px;
+    background: linear-gradient(90deg, #fff 40%, var(--accent) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .header-text p {
+    color: var(--text2);
+    font-size: 13px;
+    margin-top: 3px;
+    font-family: 'DM Mono', monospace;
+    font-weight: 300;
+  }
+
+  /* ─── PILLS ─── */
+  .pills {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 32px;
+  }
+  .pill {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 100px;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    background: var(--surface);
+    letter-spacing: 0.3px;
+  }
+  .pill.green { border-color: rgba(0,212,170,0.3); color: var(--teal); background: rgba(0,212,170,0.06); }
+  .pill.purple { border-color: rgba(108,99,255,0.3); color: var(--accent); background: rgba(108,99,255,0.06); }
+
+  /* ─── CARD ─── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 32px;
+    margin-bottom: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, rgba(108,99,255,0.04) 0%, transparent 50%);
+    pointer-events: none;
+  }
+
+  .card-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--text3);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-title span { width: 20px; height: 2px; background: var(--accent); display: inline-block; border-radius: 2px; }
+
+  /* ─── FORM ─── */
+  .form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  .field { display: flex; flex-direction: column; gap: 8px; }
+  .field.full { grid-column: 1 / -1; }
+
+  label {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--text2);
+  }
+
+  input, select {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: 10px;
+    padding: 12px 16px;
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 14px;
+    outline: none;
+    transition: all 0.2s;
+    width: 100%;
+  }
+  input:focus, select:focus {
+    border-color: var(--accent);
+    background: rgba(108,99,255,0.05);
+    box-shadow: 0 0 0 3px rgba(108,99,255,0.1);
+  }
+  input::placeholder { color: var(--text3); }
+  select option { background: var(--surface2); }
+
+  /* ─── QUICK SITES ─── */
+  .quick-sites {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .site-chip {
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    background: var(--surface2);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .site-chip:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: rgba(108,99,255,0.08);
+  }
+
+  /* ─── KEYWORDS ─── */
+  .keyword-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .kw-chip {
+    font-size: 12px;
+    padding: 5px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border2);
+    color: var(--text2);
+    background: var(--surface2);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .kw-chip:hover {
+    border-color: var(--teal);
+    color: var(--teal);
+    background: rgba(0,212,170,0.06);
+  }
+
+  /* ─── SLIDER ─── */
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  input[type="range"] {
+    flex: 1;
+    padding: 0;
+    height: 4px;
+    background: var(--border2);
+    border-radius: 4px;
+    border: none;
+    appearance: none;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    cursor: pointer;
+    border: 2px solid var(--bg);
+    box-shadow: 0 0 10px rgba(108,99,255,0.5);
+  }
+  .slider-val {
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent);
+    min-width: 40px;
+    text-align: right;
+  }
+
+  /* ─── BUTTON ─── */
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 15px 28px;
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent2) 100%);
+    color: #fff;
+    box-shadow: 0 4px 24px rgba(108,99,255,0.35);
+  }
+  .btn-primary:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(108,99,255,0.5);
+  }
+  .btn-primary:active:not(:disabled) { transform: translateY(0); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+  .btn-download {
+    background: linear-gradient(135deg, var(--teal) 0%, var(--teal2) 100%);
+    color: #08090d;
+    box-shadow: 0 4px 24px rgba(0,212,170,0.3);
+    font-weight: 700;
+  }
+  .btn-download:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,212,170,0.45); }
+
+  /* ─── PROGRESS CARD ─── */
+  #progress-section { display: none; }
+
+  .progress-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .progress-site {
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .progress-count {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 22px;
+    color: var(--accent);
+  }
+  .progress-count small {
+    font-size: 12px;
+    color: var(--text2);
+    font-family: 'DM Mono', monospace;
+    font-weight: 400;
+  }
+
+  .progress-bar-wrap {
+    background: var(--surface2);
+    border-radius: 100px;
+    height: 6px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    border-radius: 100px;
+    background: linear-gradient(90deg, var(--accent), var(--teal));
+    transition: width 0.4s ease;
+    box-shadow: 0 0 12px rgba(108,99,255,0.5);
+    width: 0%;
+  }
+
+  /* ─── LOG ─── */
+  .log-wrap {
+    background: #080a0f;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+    max-height: 200px;
+    overflow-y: auto;
+    font-family: 'DM Mono', monospace;
+    font-size: 12px;
+    font-weight: 300;
+    line-height: 1.8;
+    color: var(--text2);
+  }
+  .log-wrap::-webkit-scrollbar { width: 4px; }
+  .log-wrap::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+  .log-line { padding: 1px 0; }
+  .log-line.success { color: var(--teal); }
+  .log-line.warn { color: var(--warning); }
+  .log-line.error { color: var(--error); }
+
+  /* ─── STATUS BADGE ─── */
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'DM Mono', monospace;
+    font-size: 11px;
+    padding: 4px 10px;
+    border-radius: 100px;
+    font-weight: 500;
+  }
+  .status-badge.running { background: rgba(108,99,255,0.12); color: var(--accent); border: 1px solid rgba(108,99,255,0.25); }
+  .status-badge.done { background: rgba(0,212,170,0.12); color: var(--teal); border: 1px solid rgba(0,212,170,0.25); }
+  .status-badge.error { background: rgba(255,76,106,0.12); color: var(--error); border: 1px solid rgba(255,76,106,0.25); }
+
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .dot.pulse { animation: pulse 1.2s ease infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  /* ─── RESULT ─── */
+  #result-section { display: none; }
+
+  .result-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  .stat-box {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: 12px;
+    padding: 16px;
+    text-align: center;
+  }
+  .stat-box .num {
+    font-family: 'Syne', sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--accent), var(--teal));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .stat-box .lbl {
+    font-family: 'DM Mono', monospace;
+    font-size: 10px;
+    color: var(--text3);
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+  }
+
+  /* ─── ERROR ─── */
+  #error-section { display: none; }
+  .error-box {
+    background: rgba(255,76,106,0.08);
+    border: 1px solid rgba(255,76,106,0.2);
+    border-radius: 12px;
+    padding: 16px 20px;
+    color: #FF8FA3;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .error-box strong { display: block; margin-bottom: 6px; color: var(--error); font-family: 'Syne', sans-serif; }
+
+  /* ─── INFO BOX ─── */
+  .info-box {
+    background: rgba(108,99,255,0.06);
+    border: 1px solid rgba(108,99,255,0.15);
+    border-radius: 12px;
+    padding: 14px 18px;
+    font-size: 12.5px;
+    color: var(--text2);
+    line-height: 1.7;
+    margin-top: 16px;
+  }
+  .info-box b { color: var(--accent); }
+
+  /* ─── SPINNER ─── */
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,0.2);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ─── DIVIDER ─── */
+  hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+
+  /* ─── RESPONSIVE ─── */
+  @media (max-width: 600px) {
+    .form-grid { grid-template-columns: 1fr; }
+    .result-grid { grid-template-columns: 1fr 1fr; }
+    header { flex-direction: column; align-items: flex-start; gap: 12px; }
+  }
+</style>
+</head>
+<body>
+<div class="blob blob-1"></div>
+<div class="blob blob-2"></div>
+<div class="blob blob-3"></div>
+
+<div class="wrap">
+
+  <header>
+    <div class="logo-icon">🕸️</div>
+    <div class="header-text">
+      <h1>DataHarvest</h1>
+      <p>universal e-commerce scraper → xlsx</p>
+    </div>
+  </header>
+
+  <div class="pills">
+    <div class="pill green">✓ Amazon.in</div>
+    <div class="pill green">✓ Amazon.com</div>
+    <div class="pill purple">+ Amazon Global</div>
+  </div>
+
+  <!-- ── CONFIG CARD ── -->
+  <div class="card" id="config-card">
+    <div class="card-title"><span></span> Configure Scrape</div>
+
+    <div class="form-grid">
+      <div class="field full">
+        <label>Website URL</label>
+        <input type="text" id="url-input" placeholder="https://www.amazon.in" />
+        <div class="quick-sites">
+          <div class="site-chip" onclick="setUrl('https://www.amazon.in')">amazon.in</div>
+          <div class="site-chip" onclick="setUrl('https://www.amazon.com')">amazon.com</div>
+          <div class="site-chip" onclick="setUrl('https://www.amazon.co.uk')">amazon.co.uk</div>
+        </div>
+      </div>
+
+      <div class="field full">
+        <label>Search Keyword / Filter</label>
+        <input type="text" id="keyword-input" placeholder="e.g. herbal face wash, protein powder..." />
+        <div class="keyword-chips">
+          <div class="kw-chip" onclick="setKeyword('herbal')">herbal</div>
+          <div class="kw-chip" onclick="setKeyword('organic skincare')">organic skincare</div>
+          <div class="kw-chip" onclick="setKeyword('protein powder')">protein powder</div>
+          <div class="kw-chip" onclick="setKeyword('running shoes')">running shoes</div>
+          <div class="kw-chip" onclick="setKeyword('laptop')">laptop</div>
+          <div class="kw-chip" onclick="setKeyword('wireless earbuds')">wireless earbuds</div>
+          <div class="kw-chip" onclick="setKeyword('vitamin c serum')">vitamin c serum</div>
+        </div>
+      </div>
+
+      <div class="field full">
+        <label>Max Products to Scrape</label>
+        <div class="slider-row">
+          <input type="range" id="max-slider" min="10" max="500" value="100" step="10"
+            oninput="document.getElementById('slider-val').textContent = this.value" />
+          <div class="slider-val" id="slider-val">100</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="info-box">
+      <b>What gets scraped:</b> Product Name · Price · MRP · Discount · Rating · Reviews · Brand · Availability · Delivery Info · Product URL · Image URL — and any other public fields found on the page.
+    </div>
+
+    <hr>
+
+    <button class="btn btn-primary" id="scrape-btn" onclick="startScrape()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      Start Scraping
+    </button>
+  </div>
+
+  <!-- ── PROGRESS CARD ── -->
+  <div class="card" id="progress-section">
+    <div class="card-title"><span></span> Live Progress</div>
+
+    <div class="progress-header">
+      <div>
+        <div class="progress-site" id="prog-site">—</div>
+        <div style="margin-top:4px">
+          <span class="status-badge running" id="status-badge">
+            <span class="dot pulse"></span> Running
+          </span>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div class="progress-count"><span id="prod-count">0</span> <small>products</small></div>
+      </div>
+    </div>
+
+    <div class="progress-bar-wrap">
+      <div class="progress-bar-fill" id="prog-bar"></div>
+    </div>
+
+    <div class="log-wrap" id="log-box">
+      <div class="log-line" style="color:var(--text3)">Waiting for logs...</div>
+    </div>
+  </div>
+
+  <!-- ── RESULT CARD ── -->
+  <div class="card" id="result-section">
+    <div class="card-title"><span></span> Scrape Complete</div>
+
+    <div class="result-grid">
+      <div class="stat-box">
+        <div class="num" id="res-total">0</div>
+        <div class="lbl">Products</div>
+      </div>
+      <div class="stat-box">
+        <div class="num" id="res-fields">—</div>
+        <div class="lbl">Fields</div>
+      </div>
+      <div class="stat-box">
+        <div class="num" id="res-pages">—</div>
+        <div class="lbl">Pages</div>
+      </div>
+    </div>
+
+    <button class="btn btn-download" id="download-btn" onclick="downloadFile()">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download Excel (.xlsx)
+    </button>
+
+    <div style="margin-top:14px; text-align:center;">
+      <span style="font-family:'DM Mono',monospace; font-size:11px; color:var(--text3); cursor:pointer;"
+        onclick="resetApp()">← Scrape Again</span>
+    </div>
+  </div>
+
+  <!-- ── ERROR CARD ── -->
+  <div class="card" id="error-section">
+    <div class="error-box">
+      <strong>⚠ Scrape Failed</strong>
+      <span id="error-msg"></span>
+    </div>
+    <div style="margin-top:16px; text-align:center;">
+      <span style="font-family:'DM Mono',monospace; font-size:11px; color:var(--text3); cursor:pointer;"
+        onclick="resetApp()">← Try Again</span>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let currentJobId = null;
+let pollInterval = null;
+let logCache = [];
+
+function setUrl(u) { document.getElementById('url-input').value = u; }
+function setKeyword(k) { document.getElementById('keyword-input').value = k; }
+
+async function startScrape() {
+  const url = document.getElementById('url-input').value.trim();
+  const keyword = document.getElementById('keyword-input').value.trim();
+  const max = document.getElementById('max-slider').value;
+
+  if (!url) { flash('url-input', 'Please enter a website URL'); return; }
+  if (!keyword) { flash('keyword-input', 'Please enter a search keyword'); return; }
+
+  document.getElementById('scrape-btn').disabled = true;
+  document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Starting...';
+
+  hide('result-section');
+  hide('error-section');
+  logCache = [];
+  document.getElementById('log-box').innerHTML = '';
+  document.getElementById('prod-count').textContent = '0';
+  document.getElementById('prog-bar').style.width = '0%';
+  document.getElementById('prog-site').textContent = url;
+
+  try {
+    const res = await fetch('/api/scrape', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, keyword, max_products: parseInt(max) })
+    });
+    const data = await res.json();
+
+    if (data.error) { showError(data.error); resetBtn(); return; }
+
+    currentJobId = data.job_id;
+    show('progress-section');
+    setStatusBadge('running');
+    document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Scraping...';
+    pollInterval = setInterval(pollStatus, 1200);
+
+  } catch (e) {
+    showError('Could not connect to the scraper backend. Make sure the server is running.');
+    resetBtn();
+  }
+}
+
+async function pollStatus() {
+  if (!currentJobId) return;
+  try {
+    const res = await fetch(`/api/status/${currentJobId}`);
+    const job = await res.json();
+
+    // Update progress bar
+    const pct = job.progress || 0;
+    document.getElementById('prog-bar').style.width = pct + '%';
+    document.getElementById('prod-count').textContent = job.found || 0;
+
+    // Update log
+    if (job.log && job.log.length > logCache.length) {
+      const newLines = job.log.slice(logCache.length);
+      const logBox = document.getElementById('log-box');
+      newLines.forEach(entry => {
+        const msg   = typeof entry === 'string' ? entry : entry.msg;
+        const level = typeof entry === 'string' ? 'info' : (entry.level || 'info');
+        const div   = document.createElement('div');
+        div.className = 'log-line' +
+          (level === 'success' ? ' success' : '') +
+          (level === 'warn'    ? ' warn'    : '') +
+          (level === 'error'   ? ' error'   : '');
+        div.textContent = msg;
+        logBox.appendChild(div);
+      });
+      logBox.scrollTop = logBox.scrollHeight;
+      logCache = job.log;
+    }
+
+    if (job.status === 'done') {
+      clearInterval(pollInterval);
+      setStatusBadge('done');
+      document.getElementById('prog-bar').style.width = '100%';
+
+      document.getElementById('res-total').textContent = job.total || job.found;
+      document.getElementById('res-fields').textContent = '12+';
+      document.getElementById('res-pages').textContent = Math.ceil((job.total || job.found) / 20) || '—';
+
+      setTimeout(() => {
+        show('result-section');
+        hide('progress-section');
+        resetBtn();
+      }, 800);
+    }
+
+    if (job.status === 'error') {
+      clearInterval(pollInterval);
+      setStatusBadge('error');
+      showError(job.error || 'An unknown error occurred.');
+      hide('progress-section');
+      resetBtn();
+    }
+
+  } catch (e) { /* network blip, keep polling */ }
+}
+
+function downloadFile() {
+  if (!currentJobId) return;
+  const btn = document.getElementById('download-btn');
+  btn.innerHTML = '<div class="spinner" style="border-color:rgba(0,0,0,0.2);border-top-color:#000"></div> Downloading...';
+  window.location.href = `/api/download/${currentJobId}`;
+  setTimeout(() => {
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Excel (.xlsx)';
+  }, 2000);
+}
+
+function showError(msg) {
+  document.getElementById('error-msg').textContent = msg;
+  show('error-section');
+}
+
+function setStatusBadge(state) {
+  const b = document.getElementById('status-badge');
+  const labels = { running: '⬤ Running', done: '✓ Complete', error: '✕ Failed' };
+  b.className = 'status-badge ' + state;
+  b.innerHTML = `<span class="dot${state==='running'?' pulse':''}"></span> ${labels[state]}`;
+}
+
+function resetApp() {
+  currentJobId = null;
+  clearInterval(pollInterval);
+  hide('result-section');
+  hide('error-section');
+  hide('progress-section');
+  resetBtn();
+}
+
+function resetBtn() {
+  const btn = document.getElementById('scrape-btn');
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> Start Scraping';
+}
+
+function flash(id, msg) {
+  const el = document.getElementById(id);
+  el.style.borderColor = 'var(--error)';
+  el.style.boxShadow = '0 0 0 3px rgba(255,76,106,0.15)';
+  el.placeholder = msg;
+  setTimeout(() => {
+    el.style.borderColor = '';
+    el.style.boxShadow = '';
+    el.placeholder = el.id === 'url-input' ? 'https://www.amazon.in' : 'e.g. herbal face wash, protein powder...';
+  }, 2000);
+}
+
+function show(id) { document.getElementById(id).style.display = 'block'; }
+function hide(id) { document.getElementById(id).style.display = 'none'; }
+</script>
+</body>
+</html>

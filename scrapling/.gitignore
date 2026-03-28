@@ -1,0 +1,36 @@
+# Environment & Secrets
+.env
+*.env.*
+.env.local
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output files (generated Excel files)
+outputs/*.xlsx
+outputs/~$*
+
+# Temporary files
+*.tmp
+*.temp
+~$*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
