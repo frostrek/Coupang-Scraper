@@ -429,7 +429,8 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
 
             html = fetch_with_scrapling(url, wait_sec=5)
 
-            if not html or html.startswith("ERROR:"):
+            # Check for failure (None) or our custom string error ("ERROR: ...")
+            if not html or (isinstance(html, str) and html.startswith("ERROR:")):
                 # Extract specific error text if it failed
                 specific_err = html if html else "Unknown error occurred"
                 msg = (f"Scrape Failed.\nDetailed Error: {specific_err}\n"
