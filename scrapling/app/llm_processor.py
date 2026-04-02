@@ -10,6 +10,16 @@ api_key = os.getenv("GEMINI_API_KEY")
 if api_key:
     genai.configure(api_key=api_key)
 
+# Cache the model instance at module level — avoids re-init overhead per product
+_cached_model = None
+
+def _get_model():
+    global _cached_model
+    if _cached_model is None:
+        # gemini-2.5-flash is 10x faster than gemini-2.5-pro with equivalent quality for extraction/sanitization
+        _cached_model = genai.GenerativeModel("gemini-2.5-flash")
+    return _cached_model
+
 def sanitize_product_data(product):
     """
     Sanitizes product data using Gemini LLM to remove Coupang-banned keywords.
@@ -20,7 +30,7 @@ def sanitize_product_data(product):
         return product
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-pro")
+        model = _get_model()
         
         prompt = f"""
 You are a strict e-commerce catalog compliance engine and Precision Data Extractor for Coupang, South Korea's largest e-commerce platform.

@@ -5,12 +5,32 @@ from dotenv import load_dotenv
 load_dotenv()
 db_url = os.environ.get("DATABASE_URL")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# CONNECTION POOLING — reuse a single connection instead of open/close per query
+# ─────────────────────────────────────────────────────────────────────────────
+_conn_cache = None
+
 def get_db_connection():
+    global _conn_cache
     if not db_url or "YOUR-PASSWORD" in db_url:
         return None
     try:
+        # Return cached connection if it's still alive
+        if _conn_cache is not None:
+            try:
+                _conn_cache.cursor().execute("SELECT 1")
+                return _conn_cache
+            except Exception:
+                # Connection went stale, reconnect
+                try:
+                    _conn_cache.close()
+                except Exception:
+                    pass
+                _conn_cache = None
+
         conn = psycopg2.connect(db_url)
         conn.autocommit = True  # Required for Supabase Transaction Pooler (port 6543)
+        _conn_cache = conn
         return conn
     except Exception as e:
         print(f"[Supabase DB] Error connecting: {e}")
@@ -24,15 +44,11 @@ def is_sku_scraped(sku: str) -> bool:
         
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT sku FROM products WHERE sku = %s", (sku,))
-            result = cur.fetchone()
-            return result is not None
+            cur.execute("SELECT 1 FROM products WHERE sku = %s LIMIT 1", (sku,))
+            return cur.fetchone() is not None
     except Exception as e:
         print(f"[Supabase DB] Error checking SKU '{sku}': {e}")
         return False
-    finally:
-        if conn:
-            conn.close()
 
 def is_product_name_scraped(name: str) -> bool:
     """Fallback dedup: checks if a product name already exists in the Data Warehouse."""
@@ -42,15 +58,11 @@ def is_product_name_scraped(name: str) -> bool:
         
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT product_name FROM products WHERE product_name ILIKE %s LIMIT 1", (name.strip(),))
-            result = cur.fetchone()
-            return result is not None
+            cur.execute("SELECT 1 FROM products WHERE product_name ILIKE %s LIMIT 1", (name.strip(),))
+            return cur.fetchone() is not None
     except Exception as e:
         print(f"[Supabase DB] Error checking product name: {e}")
         return False
-    finally:
-        if conn:
-            conn.close()
 
 def save_product_to_db(prod: dict):
     """Inserts a fully formatted scraped product into the Supabase Data Warehouse."""
@@ -97,6 +109,3 @@ def save_product_to_db(prod: dict):
     except Exception as e:
         print(f"[Supabase DB] ❌ Error inserting SKU '{sku}': {e}")
         return False
-    finally:
-        if conn:
-            conn.close()

@@ -30,7 +30,7 @@ def fetch_with_scrapling(url, wait_sec=3, fetcher=None):
         # extra_flags are critical for Playwright to run correctly inside a Docker container
         response = fetcher.fetch(
             url,
-            timeout=90000,  # Increase to 90 seconds for Render's slow network
+            timeout=45000,  # 45s is plenty — 90s was overkill and delays failures
             network_idle=False,  # Don't wait for every single background tracking script
             disable_resources=True,  # Don't load images/CSS/fonts to save time/memory
             extra_flags=[
@@ -505,7 +505,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
                     log(f"✨ Perfecting properties with Gemini: {pname[:30]}...")
                     prod = sanitize_product_data(prod)
                     
-                    time.sleep(random.uniform(1.2, 2.5))
+                    time.sleep(random.uniform(0.3, 0.8))
 
                 # Preserve Product URL for Excel export and UI
                 prod['Product URL'] = prod.pop('_product_url', None)
@@ -528,7 +528,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
             if added == 0 and skipped == 0:
                 break
             page += 1
-            time.sleep(random.uniform(2.0, 3.5))
+            time.sleep(random.uniform(0.8, 1.5))
 
         if not all_products:
             job['status'] = 'error'; job['error'] = "No products were scraped."; return
