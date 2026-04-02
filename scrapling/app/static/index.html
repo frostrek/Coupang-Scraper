@@ -1076,10 +1076,27 @@ async function startScrape() {
   }
 }
 
+let pollFailCount = 0;
+
 async function pollStatus() {
   if (!currentJobId) return;
   try {
     const res = await fetch(`/api/status/${currentJobId}`);
+    
+    // Handle 404 — server may have restarted (Render redeploy) wiping in-memory jobs
+    if (!res.ok) {
+      pollFailCount++;
+      if (pollFailCount >= 8) {
+        clearInterval(pollInterval);
+        setStatusBadge('error');
+        showError('Lost connection to the scrape job. The server may have restarted during a deployment. Please try scraping again.');
+        hide('progress-section');
+        resetBtn();
+      }
+      return;
+    }
+    
+    pollFailCount = 0;  // Reset on successful poll
     const job = await res.json();
 
     const pct = job.progress || 0;
@@ -1130,7 +1147,17 @@ async function pollStatus() {
       resetBtn();
     }
 
-  } catch (e) { /* network blip, keep polling */ }
+  } catch (e) { 
+    // Network blip — increment fail count but keep polling
+    pollFailCount++;
+    if (pollFailCount >= 8) {
+      clearInterval(pollInterval);
+      setStatusBadge('error');
+      showError('Lost connection to the server. Please check your internet or try again.');
+      hide('progress-section');
+      resetBtn();
+    }
+  }
 }
 
 // ── TABLE FUNCTIONS ──

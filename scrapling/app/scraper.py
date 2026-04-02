@@ -496,16 +496,20 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
                     skipped += 1
                     continue
 
-                # Enrich with PDP data
-                if product_url:
-                    log(f"🔎 Deep scraping: {pname[:40]}...")
-                    prod = fetch_product_details(product_url, prod, fetcher=job_fetcher)
-                    
-                    # Gemini LLM Sanitization and Precision Extractor
-                    log(f"✨ Perfecting properties with Gemini: {pname[:30]}...")
-                    prod = sanitize_product_data(prod)
-                    
-                    time.sleep(random.uniform(0.3, 0.8))
+                # Enrich with PDP data — wrapped in try/except so one product failure
+                # never kills the entire job (production resilience)
+                try:
+                    if product_url:
+                        log(f"🔎 Deep scraping: {pname[:40]}...")
+                        prod = fetch_product_details(product_url, prod, fetcher=job_fetcher)
+                        
+                        # Gemini LLM Sanitization and Precision Extractor
+                        log(f"✨ Perfecting properties with Gemini: {pname[:30]}...")
+                        prod = sanitize_product_data(prod)
+                        
+                        time.sleep(random.uniform(0.3, 0.8))
+                except Exception as pdp_err:
+                    log(f"⚠️ Error enriching {pname[:30]}: {pdp_err}. Using basic data.", 'warn')
 
                 # Preserve Product URL for Excel export and UI
                 prod['Product URL'] = prod.pop('_product_url', None)
@@ -513,9 +517,12 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
                 all_products.append(prod)
                 
                 # Insert fully sanitized product dictionary into Postgres Warehouse
-                sku = prod.get('SKU')  # Re-read — PDP scraping may have found the SKU
-                if sku:
-                    db.save_product_to_db(prod)
+                try:
+                    sku = prod.get('SKU')  # Re-read — PDP scraping may have found the SKU
+                    if sku:
+                        db.save_product_to_db(prod)
+                except Exception as db_err:
+                    log(f"⚠️ DB save failed for {pname[:30]}: {db_err}", 'warn')
                     
                 added += 1
 

@@ -1,36 +1,40 @@
 import os
 import psycopg2
+import threading
 from dotenv import load_dotenv
 
 load_dotenv()
 db_url = os.environ.get("DATABASE_URL")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONNECTION POOLING — reuse a single connection instead of open/close per query
+# THREAD-SAFE CONNECTION POOLING — one connection per thread, auto-reconnect
 # ─────────────────────────────────────────────────────────────────────────────
-_conn_cache = None
+_local = threading.local()
 
 def get_db_connection():
-    global _conn_cache
+    """Returns a cached DB connection for the current thread. Auto-reconnects if stale."""
     if not db_url or "YOUR-PASSWORD" in db_url:
         return None
     try:
-        # Return cached connection if it's still alive
-        if _conn_cache is not None:
+        conn = getattr(_local, 'conn', None)
+        
+        # Test if existing connection is still alive
+        if conn is not None:
             try:
-                _conn_cache.cursor().execute("SELECT 1")
-                return _conn_cache
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                return conn
             except Exception:
-                # Connection went stale, reconnect
                 try:
-                    _conn_cache.close()
+                    conn.close()
                 except Exception:
                     pass
-                _conn_cache = None
+                _local.conn = None
 
-        conn = psycopg2.connect(db_url)
+        # Create new connection
+        conn = psycopg2.connect(db_url, connect_timeout=10)
         conn.autocommit = True  # Required for Supabase Transaction Pooler (port 6543)
-        _conn_cache = conn
+        _local.conn = conn
         return conn
     except Exception as e:
         print(f"[Supabase DB] Error connecting: {e}")
@@ -48,6 +52,8 @@ def is_sku_scraped(sku: str) -> bool:
             return cur.fetchone() is not None
     except Exception as e:
         print(f"[Supabase DB] Error checking SKU '{sku}': {e}")
+        # Connection may be broken, reset it
+        _local.conn = None
         return False
 
 def is_product_name_scraped(name: str) -> bool:
@@ -62,6 +68,7 @@ def is_product_name_scraped(name: str) -> bool:
             return cur.fetchone() is not None
     except Exception as e:
         print(f"[Supabase DB] Error checking product name: {e}")
+        _local.conn = None
         return False
 
 def save_product_to_db(prod: dict):
@@ -108,4 +115,5 @@ def save_product_to_db(prod: dict):
         return True
     except Exception as e:
         print(f"[Supabase DB] ❌ Error inserting SKU '{sku}': {e}")
+        _local.conn = None
         return False
