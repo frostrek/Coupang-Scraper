@@ -16,14 +16,16 @@ from . import db
 # ─────────────────────────────────────────────────────────────────────────────
 # SCrapling FETCH (Stealthy, handles JS + bot-checks)
 # ─────────────────────────────────────────────────────────────────────────────
-def fetch_with_scrapling(url, wait_sec=3):
+def fetch_with_scrapling(url, wait_sec=3, fetcher=None):
     try:
         from scrapling import StealthyFetcher
         log_msg = f"Fetching with Scrapling: {url}"
         print(log_msg)
         
-        # Initialize the fetcher with stealth settings
-        fetcher = StealthyFetcher()
+        # Initialize the fetcher with stealth settings if one is not provided
+        if fetcher is None:
+            fetcher = StealthyFetcher()
+        
         # Scrapling handles viewport, UA automatically
         # extra_flags are critical for Playwright to run correctly inside a Docker container
         response = fetcher.fetch(
@@ -251,10 +253,10 @@ def extract_single_product(c, base_url):
 
     return p
 
-def fetch_product_details(url, existing_p):
+def fetch_product_details(url, existing_p, fetcher=None):
     """Visits the Product Detail Page (PDP) to extract deep information."""
-    html = fetch_with_scrapling(url, wait_sec=2)
-    if not html:
+    html = fetch_with_scrapling(url, wait_sec=2, fetcher=fetcher)
+    if not html or isinstance(html, str) and html.startswith("ERROR:"):
         return existing_p
 
     soup = BeautifulSoup(html, 'lxml')
@@ -421,13 +423,17 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
 
         log(f"🌐 Site   : {base_url}")
         log(f"🔑 Keyword: '{keyword}'  |  Max: {max_products}")
-        log("🚀 Launching Scrapling fetcher...")
+        log("🚀 Launching Scrapling fetcher (Shared Instance)...")
+
+        # Create ONE shared browser instance to prevent devastating OOM crashes
+        from scrapling import StealthyFetcher
+        job_fetcher = StealthyFetcher()
 
         while len(all_products) < max_products:
             url = build_search_url(base_url, keyword, page)
             log(f"📄 Fetching page {page} …")
 
-            html = fetch_with_scrapling(url, wait_sec=5)
+            html = fetch_with_scrapling(url, wait_sec=5, fetcher=job_fetcher)
 
             # Check for failure (None) or our custom string error ("ERROR: ...")
             if not html or (isinstance(html, str) and html.startswith("ERROR:")):
@@ -493,7 +499,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
                 # Enrich with PDP data
                 if product_url:
                     log(f"🔎 Deep scraping: {pname[:40]}...")
-                    prod = fetch_product_details(product_url, prod)
+                    prod = fetch_product_details(product_url, prod, fetcher=job_fetcher)
                     
                     # Gemini LLM Sanitization and Precision Extractor
                     log(f"✨ Perfecting properties with Gemini: {pname[:30]}...")
