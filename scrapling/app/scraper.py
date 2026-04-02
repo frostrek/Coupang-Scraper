@@ -24,16 +24,27 @@ def fetch_with_scrapling(url, wait_sec=3):
         
         # Initialize the fetcher with stealth settings
         fetcher = StealthyFetcher()
-        # Scrapling handles viewport, UA, and other headers automatically with StealthyFetcher
-        response = fetcher.fetch(url)
+        # Scrapling handles viewport, UA automatically
+        # extra_flags are critical for Playwright to run correctly inside a Docker container
+        response = fetcher.fetch(
+            url,
+            extra_flags=[
+                "--no-sandbox", 
+                "--disable-dev-shm-usage", 
+                "--disable-setuid-sandbox", 
+                "--disable-gpu"
+            ]
+        )
         
         if response.status != 200:
             print(f"[Scrapling] Non-200 status code: {response.status}")
         
         return response.body
     except Exception as e:
-        print(f"[Scrapling] Error: {e}")
-        return None
+        err_msg = str(e)
+        print(f"[Scrapling] Error: {err_msg}")
+        # Return the error message string so the background job can log it
+        return f"ERROR: {err_msg}"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PRODUCT CONTAINER SELECTORS (Organized by platform for scalability)
@@ -415,9 +426,11 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
 
             html = fetch_with_scrapling(url, wait_sec=5)
 
-            if not html:
-                msg = ("Scrapling could not load the page.\n"
-                       "Check your internet connection or if the site is blocking access.")
+            if not html or html.startswith("ERROR:"):
+                # Extract specific error text if it failed
+                specific_err = html if html else "Unknown error occurred"
+                msg = (f"Scrape Failed.\nDetailed Error: {specific_err}\n"
+                       "This usually means the site is blocking access from this IP or Playwright crashed.")
                 log(f"❌ {msg}", 'error')
                 job['status'] = 'error'; job['error'] = msg; return
 

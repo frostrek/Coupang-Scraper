@@ -17,32 +17,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install runtime system dependencies:
-# - libpq5: PostgreSQL client library (for psycopg2)
-# - Chromium + deps: Required by Playwright/Scrapling for headless browsing
+# Let Playwright automatically install all the missing OS dependencies for Chromium
+# so we never miss obscure ones like libX11.so
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
-    # Playwright/Chromium dependencies
-    libnss3 \
-    libnspr4 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libcups2 \
-    libdrm2 \
-    libxkbcommon0 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libasound2 \
-    libatspi2.0-0 \
-    libwayland-client0 \
-    fonts-liberation \
-    fonts-noto-cjk \
-    xdg-utils \
     wget \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -50,8 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy installed Python packages from builder stage
 COPY --from=builder /install /usr/local
 
-# Install Playwright browsers (Chromium only to save space)
-RUN playwright install chromium
+# Install Playwright browsers and missing OS dependencies automatically
+RUN playwright install-deps chromium && playwright install chromium
 
 # Copy application code
 COPY . .
