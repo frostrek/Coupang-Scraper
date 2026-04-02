@@ -18,6 +18,11 @@ def start_scrape():
     if not keyword: return jsonify({'error':'Keyword is required'}), 400
     if not url.startswith('http'): url = 'https://' + url
 
+    # Check concurrency limits (Render free tier RAM is tightly restricted)
+    active_jobs = sum(1 for j in jobs.values() if j.get('status') in ['running', 'queued'])
+    if active_jobs >= 2:
+        return jsonify({'error': 'Server is at maximum capacity (2 running jobs). Please wait for an existing job to finish and try again.'}), 429
+
     jid = str(uuid.uuid4())[:8]
     jobs[jid] = {'status':'queued','progress':0,'found':0,'log':[],
                  'last_message':'Queued','url':url,'keyword':keyword}

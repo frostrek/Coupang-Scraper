@@ -46,7 +46,7 @@ EXPOSE 10000
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:10000", \
      "--workers", "1", \
-     "--threads", "8", \
+     "--threads", "4", \
      "--worker-class", "gthread", \
      "--timeout", "120", \
      "--keep-alive", "5", \

@@ -552,3 +552,12 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
         job['status'] = 'error'; job['error'] = str(e)
         log(f"💥 {e}", 'error')
         print(traceback.format_exc())
+    finally:
+        # Prevent Memory Leaks! Explicitly close browser
+        if 'job_fetcher' in locals() and job_fetcher:
+            try:
+                log("🧹 Cleaning up browser instance...")
+                if hasattr(job_fetcher, 'stop'):
+                    job_fetcher.stop()
+            except Exception as clean_err:
+                print(f"[Cleanup] Failed to stop fetcher: {clean_err}")
