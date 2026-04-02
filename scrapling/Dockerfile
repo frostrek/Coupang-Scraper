@@ -45,7 +45,7 @@ EXPOSE 10000
 # - timeout 120s to handle long-running scrape requests
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:10000", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--worker-class", "gevent", \
      "--timeout", "120", \
      "--keep-alive", "5", \
