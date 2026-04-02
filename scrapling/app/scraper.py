@@ -28,6 +28,9 @@ def fetch_with_scrapling(url, wait_sec=3):
         # extra_flags are critical for Playwright to run correctly inside a Docker container
         response = fetcher.fetch(
             url,
+            timeout=90000,  # Increase to 90 seconds for Render's slow network
+            network_idle=False,  # Don't wait for every single background tracking script
+            disable_resources=True,  # Don't load images/CSS/fonts to save time/memory
             extra_flags=[
                 "--no-sandbox", 
                 "--disable-dev-shm-usage", 
