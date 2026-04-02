@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: dataharvest
+    runtime: docker
+    plan: free
+    region: singapore  # Closest to India/Korea
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false  # You'll set this manually in Render dashboard
+      - key: DATABASE_URL
+        sync: false  # You'll set this manually in Render dashboard
+      - key: PYTHONUNBUFFERED
+        value: "1"

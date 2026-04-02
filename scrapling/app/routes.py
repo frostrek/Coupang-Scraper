@@ -44,3 +44,11 @@ def download(jid):
     fp = job.get('filepath','')
     if not os.path.exists(fp): return jsonify({'error':'File missing'}), 404
     return send_file(fp, as_attachment=True, download_name=os.path.basename(fp))
+
+@app.route('/api/data/<jid>')
+def get_data(jid):
+    job = jobs.get(jid)
+    if not job or job.get('status') != 'done':
+        return jsonify({'error':'Not ready'}), 404
+    products = job.get('products', [])
+    return jsonify({'products': products, 'total': len(products)})

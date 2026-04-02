@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from .helpers import clean_text, extract_price, build_search_url
 from .excel_utils import build_excel
 from .llm_processor import sanitize_product_data
+from . import db
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCrapling FETCH (Stealthy, handles JS + bot-checks)
@@ -148,6 +149,12 @@ def extract_single_product(c, base_url):
         '_product_url': '',  # Internal use only, not exported
     }
 
+    # Extract SKU early from Amazon's data-asin attribute (most reliable source)
+    data_asin = c.get('data-asin', '').strip()
+    if data_asin and len(data_asin) == 10:
+        p['SKU'] = data_asin
+        p['Model Number'] = data_asin
+
     # Extract Product Name
     name = _pick(c, [
         'span.a-text-normal', 'h2 a span', 'h2 a', 'h3 a', 'h4 a',
@@ -164,7 +171,7 @@ def extract_single_product(c, base_url):
 
     # Extract Sale Price
     price = _pick(c, [
-        'span.a-offscreen', 'span.a-price-whole',
+        'span.a-price[data-a-size="xl"] span.a-offscreen', 'span.a-price-whole',
         '._30jeq3', '._1_WHN1', '._16Jk6d',
         '[class*="selling-price"]', '[class*="sale-price"]', '[class*="current-price"]',
         '[class*="offer-price"]', '[class*="discounted"]',
@@ -181,6 +188,17 @@ def extract_single_product(c, base_url):
     ], lambda el: extract_price(el.get_text()))
     if mrp and re.search(r'\d', mrp):
         p['Discount Base Price'] = mrp
+
+    # Mathematical Price Validation (Amazon occasionally hides Unit pricing under MRP span)
+    if p.get('Sale Price') and p.get('Discount Base Price'):
+        try:
+            sp_val = float(re.sub(r'[^\d.]', '', p['Sale Price']))
+            mrp_val = float(re.sub(r'[^\d.]', '', p['Discount Base Price']))
+            # If the base price is cheaper than sale, they were scraped backward. Swap them.
+            if mrp_val < sp_val:
+                p['Sale Price'], p['Discount Base Price'] = p['Discount Base Price'], p['Sale Price']
+        except ValueError:
+            pass
 
     # Extract Brand
     brand = _pick(c, [
@@ -348,9 +366,11 @@ def fetch_product_details(url, existing_p):
             p['SKU'] = asin_m.group(1)
             p['Model Number'] = p['SKU']
 
-    # Extract Volume / Weight from specs
-    specs = soup.get_text()
-    weight_m = re.search(r'(\d+(?:\.\d+)?\s*(?:kg|g|gm|ml|l|oz|lb))', specs, re.I)
+    # Extract Volume / Weight from specs or feature bullets ONLY
+    # This specifically targets actual product specs and prevents the scraper from picking up "39L" sizing choices globally
+    specs_text = " ".join(spec_data.values()) + " " + p.get('Detailed Description', '')
+    p['_raw_specs'] = specs_text  # Save the raw unstructured dump for Gemini absolute precision
+    weight_m = re.search(r'(\d+(?:\.\d+)?\s*(?:kg|g|gm|ml|l|oz|lb))\b', specs_text, re.I)
     if weight_m:
         val = weight_m.group(1)
         # Assign to Weight or Volume based on unit
@@ -425,33 +445,65 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
                 break
 
             added = 0
+            skipped = 0
             for prod in products:
                 if len(all_products) >= max_products:
                     break
 
-                # Enrich with PDP data
                 product_url = prod.get('_product_url')
+
+                # Pre-extract SKU from URL to check Supabase BEFORE visiting the product page
+                sku = prod.get('SKU')
+                if not sku and product_url:
+                    asin_m = re.search(r'/dp/([A-Z0-9]{10})', product_url)
+                    if asin_m:
+                        sku = asin_m.group(1)
+                        prod['SKU'] = sku
+                
+                # ── Duplicate Prevention (SKU-based, then product-name fallback) ──
+                if sku and db.is_sku_scraped(sku):
+                    log(f"⏭️ Skipping duplicate (SKU: {sku})")
+                    skipped += 1
+                    continue
+                
+                # Fallback: check by product name for non-Amazon sites without SKUs
+                pname = prod.get('Product Name', '')
+                if not sku and pname and db.is_product_name_scraped(pname):
+                    log(f"⏭️ Skipping duplicate: {pname[:40]}...")
+                    skipped += 1
+                    continue
+
+                # Enrich with PDP data
                 if product_url:
-                    pname = prod.get('Product Name', 'Unknown Product')
                     log(f"🔎 Deep scraping: {pname[:40]}...")
                     prod = fetch_product_details(product_url, prod)
                     
-                    # Gemini LLM Sanitization
-                    log(f"✨ Sanitizing with Gemini: {pname[:30]}...")
+                    # Gemini LLM Sanitization and Precision Extractor
+                    log(f"✨ Perfecting properties with Gemini: {pname[:30]}...")
                     prod = sanitize_product_data(prod)
                     
                     time.sleep(random.uniform(1.2, 2.5))
 
-                # Remove internal field before adding to results
-                prod.pop('_product_url', None)
+                # Preserve Product URL for Excel export and UI
+                prod['Product URL'] = prod.pop('_product_url', None)
+                prod.pop('_raw_specs', None)
                 all_products.append(prod)
+                
+                # Insert fully sanitized product dictionary into Postgres Warehouse
+                sku = prod.get('SKU')  # Re-read — PDP scraping may have found the SKU
+                if sku:
+                    db.save_product_to_db(prod)
+                    
                 added += 1
 
-            log(f"✅ Page {page}: +{added} products  (total {len(all_products)}/{max_products})", 'success')
+            log(f"✅ Page {page}: +{added} new, ⏭️{skipped} skipped  (total {len(all_products)}/{max_products})", 'success')
             job['progress'] = int(min(len(all_products) / max_products * 85, 85))
             job['found']    = len(all_products)
 
-            if added == 0: break
+            # Stop ONLY if the page was truly empty (no products found at all)
+            # Do NOT stop if products were found but all were duplicates — move to next page!
+            if added == 0 and skipped == 0:
+                break
             page += 1
             time.sleep(random.uniform(2.0, 3.5))
 
@@ -463,7 +515,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
         fp = build_excel(all_products, keyword, base_url, outputs_dir)
         log(f"✅ Excel saved → {os.path.basename(fp)}", 'success')
 
-        job.update({'status':'done','progress':100,'filepath':fp,'total':len(all_products)})
+        job.update({'status':'done','progress':100,'filepath':fp,'total':len(all_products),'products':all_products})
 
     except Exception as e:
         import traceback

@@ -20,31 +20,69 @@ def sanitize_product_data(product):
         return product
 
     try:
-        model = genai.GenerativeModel("gemini-flash-latest")
+        model = genai.GenerativeModel("gemini-2.5-pro")
         
         prompt = f"""
-        You are an expert e-commerce catalog optimizer for Coupang. 
-        Your task is to review and sanitize the following product data to ensure it complies with Coupang's listing policies.
-        
-        CRITICAL RULES:
-        1. Remove/Replace Superlatives: Terms like "Best", "No. 1", "Top", "Greatest", "World's Best" are strictly banned. Replace them with factual, neutral alternatives.
-        2. Remove Competitor Marks: Mentions of "Amazon", "Flipkart", "eBay", "Walmart", "Naver", etc., must be removed or replaced with generic terms.
-        3. Remove Misleading Shipping/Price info: Terms like "Rocket Delivery", "Free Shipping", "Lowest Price", "Fastest Shipping" must be removed.
-        4. Product Title Limit: Ensure the Product Name is concise and under 200 characters.
-        5. Maintain Meaning: Ensure the sanitized text accurately and professionally describes the product.
-        
-        Input Product Data:
-        - Product Name: {product.get('Product Name')}
-        - Brand: {product.get('Brand')}
-        - Manufacturer: {product.get('Manufacturer')}
-        - Detailed Description: {product.get('Detailed Description')}
-        - Search Keywords: {product.get('Search Keywords')}
-        
-        Return the updated data in strict JSON format with the following keys:
-        "Product Name", "Brand", "Manufacturer", "Detailed Description", "Search Keywords"
-        
-        Return ONLY the JSON object.
-        """
+You are a strict e-commerce catalog compliance engine and Precision Data Extractor for Coupang, South Korea's largest e-commerce platform.
+Your job is twofold:
+1) Sanitize the input product data to make it policy-compliant.
+2) Read the "Raw Specifications" text dump to definitively extract the exact Brand and Manufacturer.
+
+---
+
+## SECTION 1 — TITLE SANITIZATION
+
+Apply ALL of the following rules to the "Product Name":
+1. BANNED SUPERLATIVES: Remove "Best", "No.1", "#1", "Top", "Greatest", "World's Best", "Unbeatable". Replace with factual alternatives.
+2. BANNED COMPETITOR NAMES: Remove Amazon, Flipkart, eBay, Walmart, Naver, Coupang, Aliexpress.
+3. BANNED CLAIMS: Remove "Rocket Delivery", "Lowest Price", "FDA Approved", "Cures", etc.
+4. TITLE LENGTH: Must remain under 100 characters.
+5. NO EMOJIS OR LOGOS.
+
+---
+
+## SECTION 2 — BRAND & MANUFACTURER EXTRACTION
+
+The provided "Brand" and "Manufacturer" fields are often blank or inaccurate because of HTML scraping limitations.
+You MUST read the "Raw Specifications Text" carefully to fix them.
+1. Find the true Manufacturer: Look for strings like "Produced by", "Manufacturer:", "Mfg", or "Importer" in the Raw Specifications. Extract ONLY the company name into the "Manufacturer" field. Do not leave it blank if the information exists in the text.
+2. Find the true Brand: If the Brand field is empty or generic, extract it from the Raw Specifications or the first 1-3 words of the Product Name.
+3. If you absolutely cannot find them anywhere in the text, return the original values.
+
+---
+
+## SECTION 3 — DESCRIPTION & KEYWORDS
+
+1. Sanitize the "Detailed Description" using Section 1 rules. Preserve volume, ingredients, and specs.
+2. Sanitize "Search Keywords", preserving valid ones.
+
+---
+
+## OUTPUT FORMAT
+
+Return ONLY a valid JSON object with exactly these five keys (no markdown formatting, no code blocks, no extra text):
+
+{{
+  "Product Name": "...",
+  "Brand": "...",
+  "Manufacturer": "...",
+  "Detailed Description": "...",
+  "Search Keywords": "..."
+}}
+
+---
+
+## INPUT
+
+- Product Name: {product.get('Product Name', '')}
+- Brand (Current): {product.get('Brand', '')}
+- Manufacturer (Current): {product.get('Manufacturer', '')}
+- Search Keywords: {product.get('Search Keywords', '')}
+- Detailed Description: {product.get('Detailed Description', '')}
+
+## RAW SPECIFICATIONS TEXT
+{product.get('_raw_specs', '')}
+"""
         
         response = model.generate_content(prompt)
         text = response.text.strip()

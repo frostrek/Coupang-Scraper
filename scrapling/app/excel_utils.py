@@ -32,6 +32,7 @@ CSV_TEMPLATE_COLUMNS = [
     'Barcode',
     'Additional Image 1',
     'Additional Image 2',
+    'Product URL',
 ]
 
 # Column width configuration
@@ -59,10 +60,11 @@ COLUMN_WIDTHS = {
     'Barcode': 18,
     'Additional Image 1': 50,
     'Additional Image 2': 50,
+    'Product URL': 45,
 }
 
 # URL columns that should be styled as links
-URL_COLUMNS = {'Main Image', 'Additional Image 1', 'Additional Image 2'}
+URL_COLUMNS = {'Main Image', 'Additional Image 1', 'Additional Image 2', 'Product URL'}
 
 def build_excel(products, keyword, base_url, outputs_dir):
     """Build formatted Excel workbook from scraped product data."""
@@ -73,11 +75,11 @@ def build_excel(products, keyword, base_url, outputs_dir):
     # Use exact template columns only
     all_keys = CSV_TEMPLATE_COLUMNS.copy()
 
-    # Style definitions
-    header_fill = PatternFill("solid", fgColor="1A1A2E")
-    header_font = Font(bold=True, color="E8F4FD", size=11, name="Calibri")
+    # Style definitions — clean, default Excel look
+    header_fill = PatternFill("solid", fgColor="FFFFFF")
+    header_font = Font(bold=True, color="000000", size=11, name="Calibri")
     header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    thin_border = Side(style='thin', color='CCCCCC')
+    thin_border = Side(style='thin', color='D0D0D0')
     cell_border = Border(left=thin_border, right=thin_border, top=thin_border, bottom=thin_border)
 
     # Write header row
@@ -89,15 +91,14 @@ def build_excel(products, keyword, base_url, outputs_dir):
         cell.alignment = header_align
         cell.border = cell_border
 
-    # Data row styles
-    alt_fill = PatternFill("solid", fgColor="F0F4FF")
+    # Data row styles — no alternating colors, just plain white
     norm_fill = PatternFill("solid", fgColor="FFFFFF")
     data_font = Font(size=10, name="Calibri")
     link_font = Font(size=10, name="Calibri", color="0563C1", underline="single")
 
     # Write data rows
     for ri, prod in enumerate(products, 2):
-        fill = alt_fill if ri % 2 == 0 else norm_fill
+        fill = norm_fill
         ws.row_dimensions[ri].height = 20
         for ci, k in enumerate(all_keys, 1):
             val = prod.get(k, '')
