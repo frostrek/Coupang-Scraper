@@ -46,8 +46,9 @@ EXPOSE 10000
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:10000", \
      "--workers", "1", \
-     "--worker-class", "gevent", \
+     "--threads", "8", \
+     "--worker-class", "gthread", \
      "--timeout", "120", \
      "--keep-alive", "5", \
-     "--log-level", "info", \
+     "--log-level", "debug", \
      "app:app"]
