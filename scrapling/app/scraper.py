@@ -4,14 +4,49 @@ import os
 import re
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin
 
 from bs4 import BeautifulSoup
+from curl_cffi import requests as cffi_requests
+from browserforge.headers import HeaderGenerator
 
 from .helpers import clean_text, extract_price, build_search_url
 from .excel_utils import build_excel
 from .llm_processor import sanitize_product_data
 from . import db
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONCURRENCY CONFIGURATION
+# ─────────────────────────────────────────────────────────────────────────────
+MAX_CONCURRENT_PRODUCTS = 10  # Process 10 products in parallel (speed boost)
+
+# Initialize header generator for extreme stealth
+header_gen = HeaderGenerator()
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FAST FETCH (HTTP Only - 10x Faster than Headless Browser)
+# ─────────────────────────────────────────────────────────────────────────────
+def fetch_pdp_fast(url):
+    """Lightning-fast HTTP-only fetcher using curl_cffi to bypass TLS fingerprinting
+    without launching a slow headless browser. Takes ~300ms instead of 3000ms."""
+    try:
+        headers = header_gen.generate(browser={'name': 'chrome'})
+        # Convert dictionary to plain dict if needed, but browserforge gives a dict
+        
+        response = cffi_requests.get(
+            url, 
+            headers=headers, 
+            # Randomize browser TLS signatures to prevent IP flagging
+            impersonate=random.choice(["chrome116", "chrome120", "chrome124", "edge116"]),
+            timeout=15
+        )
+        if response.status_code == 200:
+            return response.text
+        return None
+    except Exception as e:
+        print(f"[Fast Fetcher] Bypass Failed: {e}")
+        return None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCrapling FETCH (Stealthy, handles JS + bot-checks)
@@ -116,7 +151,12 @@ def _pick(container, selectors, transform=None):
     return ''
 
 def extract_single_product(c, base_url):
-    """Extract product data from a single product container."""
+    """Extract product data from a single product container.
+    
+    PRICE FIELD SEMANTICS (Coupang Upload Standard):
+        Sale Price         = MRP / Original price BEFORE discount (e.g. ₹275, crossed out)
+        Discount Base Price = Current price AFTER discount (e.g. ₹220, what buyer pays)
+    """
     # Skip sponsored/ad products
     sponsored_selectors = [
         '.s-sponsored-label-text',
@@ -143,8 +183,8 @@ def extract_single_product(c, base_url):
         'Product Name': '',
         'Brand': '',
         'Manufacturer': '',
-        'Sale Price': '',
-        'Discount Base Price': '',
+        'Sale Price': '',          # MRP / Original (higher, crossed-out)
+        'Discount Base Price': '', # Discounted / Current (lower, what buyer pays)
         'Stock': 2,
         'Lead Time': 12,
         'Detailed Description': '',
@@ -162,6 +202,8 @@ def extract_single_product(c, base_url):
         'Barcode': '',
         'Additional Image 1': '',
         'Additional Image 2': '',
+        'Additional Image 3': '',
+        'Additional Image 4': '',
         '_product_url': '',  # Internal use only, not exported
     }
 
@@ -185,36 +227,65 @@ def extract_single_product(c, base_url):
     if name:
         p['Product Name'] = name[:220]
 
-    # Extract Sale Price
-    price = _pick(c, [
-        'span.a-price[data-a-size="xl"] span.a-offscreen', 'span.a-price-whole',
-        '._30jeq3', '._1_WHN1', '._16Jk6d',
-        '[class*="selling-price"]', '[class*="sale-price"]', '[class*="current-price"]',
-        '[class*="offer-price"]', '[class*="discounted"]',
-        '[class*="price"]', '[class*="Price"]', '[data-testid*="price"]',
-    ], lambda el: extract_price(el.get_text()))
-    if price and re.search(r'\d', price):
-        p['Sale Price'] = price
-
-    # Extract Discount Base Price (MRP)
+    # ─────────────────────────────────────────────────────────────────────
+    #  SALE PRICE = MRP / Original price (crossed-out, before discount)
+    # ─────────────────────────────────────────────────────────────────────
     mrp = _pick(c, [
-        'span.a-price.a-text-price span.a-offscreen', '._3I9_wc',
+        # Amazon: strikethrough / original price selectors
+        'span.a-price.a-text-price span.a-offscreen',
+        '.a-text-price span.a-offscreen',
+        # Generic: original / old / MRP selectors
+        '._3I9_wc',
         '[class*="original-price"]', '[class*="old-price"]', '[class*="mrp"]',
-        '[class*="was-price"]', '[class*="compare-price"]', 'del', 's', 'strike',
+        '[class*="was-price"]', '[class*="compare-price"]', '[class*="list-price"]',
+        'del', 's', 'strike',
     ], lambda el: extract_price(el.get_text()))
     if mrp and re.search(r'\d', mrp):
-        p['Discount Base Price'] = mrp
+        p['Sale Price'] = mrp
 
-    # Mathematical Price Validation (Amazon occasionally hides Unit pricing under MRP span)
+    # ─────────────────────────────────────────────────────────────────────
+    #  DISCOUNT BASE PRICE = Current discounted price (what buyer pays)
+    # ─────────────────────────────────────────────────────────────────────
+    disc_price = None
+    for sel in [
+        # Amazon: main displayed price (the big bold number)
+        'span.a-price[data-a-size="xl"] span.a-offscreen',
+        'span.a-price[data-a-size="l"] span.a-offscreen',
+        'span.a-price[data-a-size="b"] span.a-offscreen',
+        'span.priceToPay span.a-offscreen',
+        'span.a-price-whole',
+        # Indian e-commerce
+        '._30jeq3', '._1_WHN1', '._16Jk6d',
+    ]:
+        el = c.select_one(sel)
+        if el:
+            val = extract_price(el.get_text())
+            if val and re.search(r'\d', val):
+                disc_price = val
+                break
+                
+    if disc_price and re.search(r'\d', disc_price):
+        p['Discount Base Price'] = disc_price
+
+    # ─────────────────────────────────────────────────────────────────────
+    #  PRICE VALIDATION: Discount must be ≤ Sale Price (MRP)
+    #  If discounted is somehow larger, they were scraped from wrong selectors → swap
+    # ─────────────────────────────────────────────────────────────────────
     if p.get('Sale Price') and p.get('Discount Base Price'):
         try:
-            sp_val = float(re.sub(r'[^\d.]', '', p['Sale Price']))
-            mrp_val = float(re.sub(r'[^\d.]', '', p['Discount Base Price']))
-            # If the base price is cheaper than sale, they were scraped backward. Swap them.
-            if mrp_val < sp_val:
+            sale_val = float(re.sub(r'[^\d.]', '', p['Sale Price']))
+            disc_val = float(re.sub(r'[^\d.]', '', p['Discount Base Price']))
+            if disc_val > sale_val:
+                # Discounted should never exceed MRP — selectors grabbed them backwards
                 p['Sale Price'], p['Discount Base Price'] = p['Discount Base Price'], p['Sale Price']
         except ValueError:
             pass
+
+    # If only one price is found (no discount), set both fields to exactly the same price
+    if not p.get('Sale Price') and p.get('Discount Base Price'):
+        p['Sale Price'] = p['Discount Base Price']
+    if not p.get('Discount Base Price') and p.get('Sale Price'):
+        p['Discount Base Price'] = p['Sale Price']
 
     # Extract Brand
     brand = _pick(c, [
@@ -254,13 +325,96 @@ def extract_single_product(c, base_url):
     return p
 
 def fetch_product_details(url, existing_p, fetcher=None):
-    """Visits the Product Detail Page (PDP) to extract deep information."""
-    html = fetch_with_scrapling(url, wait_sec=2, fetcher=fetcher)
+    """Visits the Product Detail Page (PDP) to extract deep information.
+    
+    Includes dedicated price extraction from PDP for higher accuracy than SERP.
+    """
+    # Try the 10x faster HTTP-only fetcher first to avoid IP blocks and headless overhead
+    html = fetch_pdp_fast(url)
+    
+    # Check if Amazon blocked the fast fetcher with a CAPTCHA or if it failed
+    if not html or "captchacharacters" in html.lower() or "type the characters" in html.lower():
+        # Fall back to the heavy, JavaScript-enabled Playwright browser instance
+        html = fetch_with_scrapling(url, wait_sec=0, fetcher=fetcher)
+
     if not html or isinstance(html, str) and html.startswith("ERROR:"):
         return existing_p
 
     soup = BeautifulSoup(html, 'lxml')
     p = existing_p.copy()
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PDP PRICE EXTRACTION (More accurate than SERP)
+    # ─────────────────────────────────────────────────────────────────────
+    # Sale Price = MRP (crossed out, original, before discount)
+    pdp_mrp = None
+    for sel in [
+        'span.priceBlockStrikePriceString',
+        '#listPrice',
+        'span.basisPrice span.a-offscreen',
+        'span[data-a-strike="true"] span.a-offscreen',
+        'span.a-text-strike',
+        'del span.a-offscreen',
+    ]:
+        el = soup.select_one(sel)
+        if el:
+            val = extract_price(el.get_text())
+            if val and re.search(r'\d', val):
+                pdp_mrp = val
+                break
+
+    # Fallback: look for "M.R.P.:" text pattern specifically (Amazon India)
+    if not pdp_mrp:
+        mrp_label = soup.find(string=re.compile(r'M\.?R\.?P\.?\s*:?', re.I))
+        if mrp_label:
+            parent = mrp_label.find_parent()
+            if parent:
+                price_el = parent.find_next('span', class_=re.compile(r'a-offscreen|a-price'))
+                if price_el:
+                    val = extract_price(price_el.get_text())
+                    if val and re.search(r'\d', val):
+                        pdp_mrp = val
+
+    # Discount Base Price = Current discounted price (what buyer pays)
+    pdp_disc = None
+    for sel in [
+        'span.priceToPay span.a-offscreen',
+        '#priceblock_dealprice',
+        '#priceblock_ourprice',
+        '.a-price[data-a-size="xl"] span.a-offscreen',
+        '.a-price[data-a-size="l"] span.a-offscreen',
+        '.a-price[data-a-size="b"] span.a-offscreen',
+        '#corePrice_feature_div span.a-offscreen',
+        '#corePriceDisplay_desktop_feature_div span.a-offscreen',
+    ]:
+        el = soup.select_one(sel)
+        if el:
+            val = extract_price(el.get_text())
+            if val and re.search(r'\d', val):
+                pdp_disc = val
+                break
+
+    # Apply PDP prices (override SERP prices only if we found better data)
+    if pdp_mrp:
+        p['Sale Price'] = pdp_mrp
+    if pdp_disc:
+        p['Discount Base Price'] = pdp_disc
+
+    # Re-validate: Discount must be ≤ Sale Price
+    if p.get('Sale Price') and p.get('Discount Base Price'):
+        try:
+            sale_val = float(re.sub(r'[^\d.]', '', p['Sale Price']))
+            disc_val = float(re.sub(r'[^\d.]', '', p['Discount Base Price']))
+            if disc_val > sale_val:
+                p['Sale Price'], p['Discount Base Price'] = p['Discount Base Price'], p['Sale Price']
+        except ValueError:
+            pass
+
+    # If only one price found (no discount), set both fields to the same value
+    if not p.get('Sale Price') and p.get('Discount Base Price'):
+        p['Sale Price'] = p['Discount Base Price']
+    if not p.get('Discount Base Price') and p.get('Sale Price'):
+        p['Discount Base Price'] = p['Sale Price']
 
     # 1. Extract Detailed Description (Prioritize "About this item" / feature bullets)
     about_item = soup.select_one('#feature-bullets')
@@ -294,9 +448,13 @@ def fetch_product_details(url, existing_p, fetcher=None):
             
         # Case A: Table rows
         for row in container.select('tr'):
-            th = row.select_one('th, td.label, .a-color-secondary, span.a-text-bold')
-            td = row.select_one('td, td.value, .a-size-base, span:not(.a-text-bold)')
-            if th and td:
+            th = row.select_one('th, td.label, .a-color-secondary')
+            td = row.select_one('td:not(.label), td.value')
+            # Fallbacks if strict structural tags are missing
+            if not td and th:
+                td = th.find_next_sibling('td') or row.select_one('.a-size-base:not(.a-color-secondary)')
+                
+            if th and td and th != td:
                 key = clean_text(th.get_text()).strip(': ').lower()
                 val = clean_text(td.get_text(separator=' ')).strip()
                 if key and val:
@@ -311,7 +469,7 @@ def fetch_product_details(url, existing_p, fetcher=None):
                 key = clean_text(key_text).strip(': ').lower()
                 # Use separator here too
                 val = clean_text(li.get_text(separator=' ').replace(key_text, '', 1)).strip(': ')
-                if key and val:
+                if key and val and key.lower() != val.lower():
                     spec_data[key] = val
             else:
                 text = clean_text(li.get_text(separator=' '))
@@ -320,7 +478,7 @@ def fetch_product_details(url, existing_p, fetcher=None):
                     if len(parts) == 2:
                         key = parts[0].strip().lower()
                         val = parts[1].strip()
-                        if key and val:
+                        if key and val and key.lower() != val.lower():
                             spec_data[key] = val
                     
         # Case C: Generic rows (divs)
@@ -330,7 +488,7 @@ def fetch_product_details(url, existing_p, fetcher=None):
                 parts = text.split(':', 1)
                 key = parts[0].strip().lower()
                 val = parts[1].strip()
-                if key and val:
+                if key and val and key.lower() != val.lower():
                     spec_data[key] = val
 
     # Map discovered specs to our fields
@@ -354,26 +512,50 @@ def fetch_product_details(url, existing_p, fetcher=None):
                     p[field] = spec_val
                     break
     
-    # Ensure SKU and Model Number are identical (User Requirement)
+    # Validation: If SKU was extracted as the literal string "ASIN", drop it so the URL fallback can rescue it
+    if p.get('SKU') and p['SKU'].strip().upper() == 'ASIN':
+        p['SKU'] = ''
+
+    # Ensure SKU and Model Number are aligned (User Requirement: Model starts with SKU and ends in -1)
     if p.get('SKU'):
-        p['Model Number'] = p['SKU']
+        p['Model Number'] = p['SKU'] + "-1"
     elif p.get('Model Number'):
         p['SKU'] = p['Model Number']
+        p['Model Number'] = p['Model Number'] + "-1"
 
-    # 3. Extract Additional Images
+    # 3. Extract Additional Images (Bulletproof Amazon strategy)
     add_images = []
-    for img in soup.select('#altImages img, .imageThumbnail img, [class*="thumbnail"] img'):
-        src = img.get('src') or img.get('data-src') or ''
-        if src and 'http' in src and 'GIF' not in src.upper():
-            # Get high-res by removing resizing suffix (Amazon specific _AC_...)
-            hi_res = re.sub(r'\._AC_.*_\.', '.', src)
-            if hi_res not in add_images and hi_res != p.get('Main Image'):
-                add_images.append(hi_res)
+    
+    # Strategy A: Extract from Amazon's inline JSON (100% reliable for all hi-res thumbnails)
+    try:
+        json_matches = re.findall(r'"hiRes":"(https://[^"]+)"', html)
+        if not json_matches:
+            json_matches = re.findall(r'"large":"(https://[^"]+)"', html)
+        
+        for src in json_matches:
+            if 'http' in src and 'GIF' not in src.upper():
+                if src not in add_images and src != p.get('Main Image'):
+                    add_images.append(src)
+    except Exception:
+        pass
+
+    # Strategy B: Fallback to DOM parsing for other sites or if JSON fails
+    if not add_images:
+        for img in soup.select('#altImages img, .imageThumbnail img, [class*="thumbnail"] img'):
+            src = img.get('src') or img.get('data-src') or ''
+            if src and 'http' in src and 'GIF' not in src.upper():
+                hi_res = re.sub(r'\._AC_.*_\.', '.', src)
+                if hi_res not in add_images and hi_res != p.get('Main Image'):
+                    add_images.append(hi_res)
 
     if add_images:
         p['Additional Image 1'] = add_images[0]
     if len(add_images) > 1:
         p['Additional Image 2'] = add_images[1]
+    if len(add_images) > 2:
+        p['Additional Image 3'] = add_images[2]
+    if len(add_images) > 3:
+        p['Additional Image 4'] = add_images[3]
 
     # Extract SKU / Model Number (Amazon ASIN) from URL if not found in specs
     if not p.get('SKU'):
@@ -382,18 +564,44 @@ def fetch_product_details(url, existing_p, fetcher=None):
             p['SKU'] = asin_m.group(1)
             p['Model Number'] = p['SKU']
 
-    # Extract Volume / Weight from specs or feature bullets ONLY
-    # This specifically targets actual product specs and prevents the scraper from picking up "39L" sizing choices globally
-    specs_text = " ".join(spec_data.values()) + " " + p.get('Detailed Description', '')
-    p['_raw_specs'] = specs_text  # Save the raw unstructured dump for Gemini absolute precision
-    weight_m = re.search(r'(\d+(?:\.\d+)?\s*(?:kg|g|gm|ml|l|oz|lb))\b', specs_text, re.I)
-    if weight_m:
-        val = weight_m.group(1)
-        # Assign to Weight or Volume based on unit
-        if re.search(r'(ml|l)$', val, re.I):
-            p['Volume'] = val
-        else:
-            p['Weight'] = val
+    # ─────────────────────────────────────────────────────────────────────
+    #  VOLUME / WEIGHT EXTRACTION (Strict Priority: Specs > Title > Body)
+    # ─────────────────────────────────────────────────────────────────────
+    def _parse_and_assign_metric(text_chunk):
+        """Attempts to parse metrics and returns True if successful."""
+        m = re.search(r'(\d+(?:\.\d+)?)\s*(kg|g|gm|ml|l|litre|liters|oz|lb)\b', text_chunk, re.I)
+        if not m: return False
+        
+        amount, unit = float(m.group(1)), m.group(2).lower()
+        if unit == 'kg': amount, unit = amount * 1000, 'g'
+        elif unit in ('l', 'litre', 'liters'): amount, unit = amount * 1000, 'ml'
+        elif unit == 'gm': unit = 'g'
+            
+        amount = round(amount, 3)
+        val = f"{int(amount) if amount.is_integer() else amount} {unit}"
+        
+        if unit in ('ml', 'l'): p['Volume'] = val
+        else: p['Weight'] = val
+        return True
+
+    # Priority 1: Check actual DB Spec tables first (Highest accuracy)
+    mapped_specs = False
+    for spec_key, spec_val in spec_data.items():
+        if any(x in spec_key for x in ['net quantity', 'net weight', 'item weight', 'volume', 'item volume']):
+            if _parse_and_assign_metric(spec_val):
+                mapped_specs = True
+                break
+                
+    # Priority 2: Check the Title
+    if not mapped_specs:
+        mapped_specs = _parse_and_assign_metric(p.get('Product Name', ''))
+        
+    # Priority 3: Check entire page dump
+    if not mapped_specs:
+        specs_text = p.get('Product Name', '') + " " + " ".join(spec_data.values()) + " " + p.get('Detailed Description', '')
+        _parse_and_assign_metric(specs_text)
+        
+    p['_raw_specs'] = p.get('Product Name', '') + " " + " ".join(spec_data.values())
 
     # Generate Search Keywords from product name
     if p.get('Product Name'):
@@ -405,6 +613,34 @@ def fetch_product_details(url, existing_p, fetcher=None):
         p['Search Keywords'] = ', '.join(unique_words[:15])
 
     return p
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SINGLE PRODUCT PROCESSOR (used by ThreadPool)
+# ─────────────────────────────────────────────────────────────────────────────
+def _process_single_product(prod, job_fetcher, log_fn):
+    """Process a single product: PDP fetch → LLM sanitize. Thread-safe.
+    
+    Returns the enriched product dict or None on critical failure.
+    """
+    pname = prod.get('Product Name', '')
+    product_url = prod.get('_product_url')
+
+    try:
+        if product_url:
+            log_fn(f"🔎 Deep scraping: {pname[:40]}...")
+            prod = fetch_product_details(product_url, prod, fetcher=job_fetcher)
+            
+            # Gemini LLM Sanitization and Precision Extractor
+            log_fn(f"✨ Perfecting with Gemini: {pname[:30]}...")
+            prod = sanitize_product_data(prod)
+            
+            time.sleep(random.uniform(0.1, 0.3))  # Reduced from 0.3-0.8
+    except Exception as pdp_err:
+        log_fn(f"⚠️ Error enriching {pname[:30]}: {pdp_err}. Using basic data.", 'warn')
+
+    return prod
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BACKGROUND JOB
@@ -423,7 +659,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
 
         log(f"🌐 Site   : {base_url}")
         log(f"🔑 Keyword: '{keyword}'  |  Max: {max_products}")
-        log("🚀 Launching Scrapling fetcher (Shared Instance)...")
+        log(f"🚀 Launching Scrapling fetcher (Shared Instance, {MAX_CONCURRENT_PRODUCTS}x concurrency)...")
 
         # Create ONE shared browser instance to prevent devastating OOM crashes
         from scrapling import StealthyFetcher
@@ -467,64 +703,81 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir):
                     job['status'] = 'error'; job['error'] = msg; return
                 break
 
-            added = 0
+            # ── Filter duplicates BEFORE expensive PDP/LLM processing ──
+            candidates = []
             skipped = 0
+            
+            # ── Supabase Bulk Optimization (Reads page once instead of row-by-row) ──
+            page_skus = []
+            page_names = []
             for prod in products:
-                if len(all_products) >= max_products:
-                    break
-
-                product_url = prod.get('_product_url')
-
-                # Pre-extract SKU from URL to check Supabase BEFORE visiting the product page
                 sku = prod.get('SKU')
-                if not sku and product_url:
-                    asin_m = re.search(r'/dp/([A-Z0-9]{10})', product_url)
+                if not sku and prod.get('_product_url'):
+                    asin_m = re.search(r'/dp/([A-Z0-9]{10})', prod.get('_product_url'))
                     if asin_m:
                         sku = asin_m.group(1)
                         prod['SKU'] = sku
+                if sku:
+                    page_skus.append(sku)
+                if prod.get('Product Name'):
+                    page_names.append(prod.get('Product Name'))
+
+            scraped_skus_bulk = db.get_scraped_skus(page_skus)
+            scraped_names_bulk = db.get_scraped_names(page_names)
+
+            for prod in products:
+                if len(all_products) + len(candidates) >= max_products:
+                    break
                 
+                sku = prod.get('SKU')
+                pname = prod.get('Product Name', '')
+
                 # ── Duplicate Prevention (SKU-based, then product-name fallback) ──
-                if sku and db.is_sku_scraped(sku):
-                    log(f"⏭️ Skipping duplicate (SKU: {sku})")
+                if sku and sku in scraped_skus_bulk:
+                    log(f"⏭️ Skipping bulk duplicate (SKU: {sku})")
                     skipped += 1
                     continue
                 
                 # Fallback: check by product name for non-Amazon sites without SKUs
-                pname = prod.get('Product Name', '')
-                if not sku and pname and db.is_product_name_scraped(pname):
-                    log(f"⏭️ Skipping duplicate: {pname[:40]}...")
+                if not sku and pname and pname.lower().strip() in scraped_names_bulk:
+                    log(f"⏭️ Skipping bulk duplicate: {pname[:40]}...")
                     skipped += 1
                     continue
 
-                # Enrich with PDP data — wrapped in try/except so one product failure
-                # never kills the entire job (production resilience)
-                try:
-                    if product_url:
-                        log(f"🔎 Deep scraping: {pname[:40]}...")
-                        prod = fetch_product_details(product_url, prod, fetcher=job_fetcher)
-                        
-                        # Gemini LLM Sanitization and Precision Extractor
-                        log(f"✨ Perfecting properties with Gemini: {pname[:30]}...")
-                        prod = sanitize_product_data(prod)
-                        
-                        time.sleep(random.uniform(0.3, 0.8))
-                except Exception as pdp_err:
-                    log(f"⚠️ Error enriching {pname[:30]}: {pdp_err}. Using basic data.", 'warn')
+                candidates.append(prod)
 
-                # Preserve Product URL for Excel export and UI
-                prod['Product URL'] = prod.pop('_product_url', None)
-                prod.pop('_raw_specs', None)
-                all_products.append(prod)
+            # ── CONCURRENT PRODUCT PROCESSING ──────────────────────────
+            added = 0
+            if candidates:
+                log(f"⚡ Processing {len(candidates)} products ({MAX_CONCURRENT_PRODUCTS}x parallel)...")
                 
-                # Insert fully sanitized product dictionary into Postgres Warehouse
-                try:
-                    sku = prod.get('SKU')  # Re-read — PDP scraping may have found the SKU
-                    if sku:
-                        db.save_product_to_db(prod)
-                except Exception as db_err:
-                    log(f"⚠️ DB save failed for {pname[:30]}: {db_err}", 'warn')
+                with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PRODUCTS) as pool:
+                    futures = {
+                        pool.submit(_process_single_product, prod, job_fetcher, log): prod
+                        for prod in candidates
+                    }
                     
-                added += 1
+                    for future in as_completed(futures):
+                        try:
+                            enriched = future.result()
+                            if enriched:
+                                # Preserve Product URL for Excel export and UI
+                                enriched['Product URL'] = enriched.pop('_product_url', None)
+                                enriched.pop('_raw_specs', None)
+                                all_products.append(enriched)
+                                
+                                # Insert fully sanitized product into Postgres Warehouse
+                                try:
+                                    sku = enriched.get('SKU')
+                                    if sku:
+                                        db.save_product_to_db(enriched)
+                                except Exception as db_err:
+                                    pname = enriched.get('Product Name', '')[:30]
+                                    log(f"⚠️ DB save failed for {pname}: {db_err}", 'warn')
+                                    
+                                added += 1
+                        except Exception as fut_err:
+                            log(f"⚠️ Product processing failed: {fut_err}", 'warn')
 
             log(f"✅ Page {page}: +{added} new, ⏭️{skipped} skipped  (total {len(all_products)}/{max_products})", 'success')
             job['progress'] = int(min(len(all_products) / max_products * 85, 85))

@@ -32,6 +32,8 @@ CSV_TEMPLATE_COLUMNS = [
     'Barcode',
     'Additional Image 1',
     'Additional Image 2',
+    'Additional Image 3',
+    'Additional Image 4',
     'Product URL',
 ]
 
@@ -60,11 +62,13 @@ COLUMN_WIDTHS = {
     'Barcode': 18,
     'Additional Image 1': 50,
     'Additional Image 2': 50,
+    'Additional Image 3': 50,
+    'Additional Image 4': 50,
     'Product URL': 45,
 }
 
 # URL columns that should be styled as links
-URL_COLUMNS = {'Main Image', 'Additional Image 1', 'Additional Image 2', 'Product URL'}
+URL_COLUMNS = {'Main Image', 'Additional Image 1', 'Additional Image 2', 'Additional Image 3', 'Additional Image 4', 'Product URL'}
 
 def build_excel(products, keyword, base_url, outputs_dir):
     """Build formatted Excel workbook from scraped product data."""

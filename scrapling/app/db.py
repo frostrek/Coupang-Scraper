@@ -32,7 +32,7 @@ def get_db_connection():
                 _local.conn = None
 
         # Create new connection
-        conn = psycopg2.connect(db_url, connect_timeout=10)
+        conn = psycopg2.connect(db_url, connect_timeout=10, sslmode='require')
         conn.autocommit = True  # Required for Supabase Transaction Pooler (port 6543)
         _local.conn = conn
         return conn
@@ -56,6 +56,20 @@ def is_sku_scraped(sku: str) -> bool:
         _local.conn = None
         return False
 
+def get_scraped_skus(sku_list: list) -> set:
+    """Bulk checks a list of SKUs in one highly efficient query to reduce DB load."""
+    conn = get_db_connection()
+    if not conn or not sku_list:
+        return set()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT sku FROM products WHERE sku = ANY(%s)", (sku_list,))
+            return {row[0] for row in cur.fetchall()}
+    except Exception as e:
+        print(f"[Supabase DB] Error bulk checking SKUs: {e}")
+        _local.conn = None
+        return set()
+
 def is_product_name_scraped(name: str) -> bool:
     """Fallback dedup: checks if a product name already exists in the Data Warehouse."""
     conn = get_db_connection()
@@ -70,6 +84,22 @@ def is_product_name_scraped(name: str) -> bool:
         print(f"[Supabase DB] Error checking product name: {e}")
         _local.conn = None
         return False
+
+def get_scraped_names(name_list: list) -> set:
+    """Bulk checks a list of product names in one query using ILIKE ANY."""
+    conn = get_db_connection()
+    if not conn or not name_list:
+        return set()
+    try:
+        with conn.cursor() as cur:
+            # Using Postgres ILIKE ANY for bulk case-insensitive matching
+            names = [n.strip() for n in name_list if n.strip()]
+            cur.execute("SELECT product_name FROM products WHERE product_name ILIKE ANY(%s)", (names,))
+            return {row[0].lower() for row in cur.fetchall() if row[0]}
+    except Exception as e:
+        print(f"[Supabase DB] Error bulk checking names: {e}")
+        _local.conn = None
+        return set()
 
 def save_product_to_db(prod: dict):
     """Inserts a fully formatted scraped product into the Supabase Data Warehouse."""

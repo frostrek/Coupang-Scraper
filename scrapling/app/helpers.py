@@ -5,7 +5,13 @@ def clean_text(t):
     return re.sub(r'\s+', ' ', (t or '').strip())
 
 def extract_price(t):
-    m = re.search(r'[\$₹€£¥]?\s*[\d,]+\.?\d*', t or '')
+    if not t: return ''
+    
+    # If there's a per-unit string like "(₹999 / 100g)", only evaluate the part BEFORE the slash
+    if '/' in t:
+        t = t.split('/')[0]
+        
+    m = re.search(r'[\$₹€£¥]?\s*[\d,]+\.?\d*', t)
     return m.group().strip() if m else clean_text(t)
 
 def get_domain(url):
