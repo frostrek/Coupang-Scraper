@@ -404,6 +404,11 @@ Return ONLY a valid JSON object with exactly these eight keys (no markdown forma
             if sanitized.get("Volume"):
                 sanitized["Volume"] = _normalize_volume_unit(sanitized["Volume"])
                 
+            # 6.5 STRICT Mutual Exclusivity: Never allow both Weight and Volume.
+            # If Gemini hallucinates both, we force exclusivity like the scraper does.
+            if sanitized.get("Volume") and sanitized.get("Weight"):
+                sanitized["Weight"] = "" # Volume takes precedence for liquids
+                
             # 7. Fallback Manufacturer to Brand if empty
             if not sanitized.get("Manufacturer") and sanitized.get("Brand"):
                 sanitized["Manufacturer"] = sanitized["Brand"]
@@ -413,8 +418,16 @@ Return ONLY a valid JSON object with exactly these eight keys (no markdown forma
             # Update product dict with sanitized fields
             for key in ["Product Name", "Brand", "Manufacturer", "Detailed Description", 
                         "Search Keywords", "Adult Only", "Weight", "Volume"]:
-                if key in sanitized and sanitized[key]:
-                    product[key] = sanitized[key]
+                # If Gemini returned empty for metric, but scraper had it, DON'T overwrite with empty
+                if key in sanitized:
+                    if key in ["Weight", "Volume"]:
+                        # If Gemini provides a metric, use it, but ALSO clear the opposing metric in the product dict!
+                        if sanitized[key]:
+                            product[key] = sanitized[key]
+                            opposing = "Weight" if key == "Volume" else "Volume"
+                            product[opposing] = ""
+                    elif sanitized[key]:
+                        product[key] = sanitized[key]
             
             print(f"[Gemini] ✅ Sanitized: {product.get('Product Name', '')[:40]}")
             return product

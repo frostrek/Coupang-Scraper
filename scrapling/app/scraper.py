@@ -308,8 +308,7 @@ def extract_single_product(c, base_url):
     if disc_price_el:
         val = extract_price(disc_price_el.get_text())
         if val and re.search(r'\d', val):
-            disc_price = val
-            p['Sale Price'] = disc_price
+            p['Sale Price'] = val
 
     # ─────────────────────────────────────────────────────────────────────
     #  PRICE VALIDATION: Discount (Sale Price) must be ≤ Original (Discount Base Price)
@@ -355,7 +354,8 @@ def extract_single_product(c, base_url):
     for sel in ['img.s-image', 'img[class*="product"]', 'img[class*="Product"]', 'img']:
         el = c.select_one(sel)
         if el:
-            src = el.get('data-a-dynamic-image') or el.get('srcset') or el.get('src') or ''
+            # Amazon lazy loading puts real url in data-src or data-a-dynamic-image
+            src = el.get('data-a-dynamic-image') or el.get('data-src') or el.get('srcset') or el.get('src') or ''
             if src.startswith('{'):
                 try:
                     urls = json.loads(src)
@@ -364,6 +364,11 @@ def extract_single_product(c, base_url):
                     pass
             if ',' in src:
                 src = src.split(',')[-1].strip().split(' ')[0]
+                
+            # Discard transparent 1x1 pixel tracking gifs or lazy-load placeholders
+            if src and ('base64' in src or 'transparent' in src or 'GIF' in src.upper() or 'data:image' in src):
+                src = el.get('data-src') or ''
+                
             if src and 'http' in src:
                 if src.startswith('//'):
                     src = 'https:' + src
@@ -460,12 +465,20 @@ def fetch_product_details(url, existing_p, fetcher=None):
 
     # Apply PDP prices (override SERP prices only if we found better data)
     # Correct PDP Price Mapping:
-    # pdp_mrp = Original Price / Strike Price (MSRP) -> Discount Base Price
-    # pdp_disc = Final Price / Current Price (Buyer Pays) -> Sale Price
-    if pdp_mrp:
-        p['Discount Base Price'] = pdp_mrp
-    if pdp_disc:
-        p['Sale Price'] = pdp_disc
+    if pdp_mrp or pdp_disc:
+        # AUTHORITY LOGIC: If the PDP has any price, totally override SERP to avoid mixed phantom prices (like 399 vs 150)
+        p['Sale Price'] = ''
+        p['Discount Base Price'] = ''
+        
+        if pdp_mrp and pdp_disc:
+            p['Discount Base Price'] = pdp_mrp
+            p['Sale Price'] = pdp_disc
+        elif pdp_mrp:
+            p['Discount Base Price'] = pdp_mrp
+            p['Sale Price'] = pdp_mrp
+        elif pdp_disc:
+            p['Discount Base Price'] = pdp_disc
+            p['Sale Price'] = pdp_disc
 
     # Re-validate: Discount must be ≤ Sale Price
     if p.get('Sale Price') and p.get('Discount Base Price'):
@@ -598,16 +611,26 @@ def fetch_product_details(url, existing_p, fetcher=None):
     # 3. Extract Additional Images (Bulletproof Amazon strategy)
     add_images = []
     
-    # Strategy A: Extract from Amazon's inline JSON (100% reliable for all hi-res thumbnails)
+    # Strategy A: Extract from Amazon's inline JSON image dictionary
     try:
-        json_matches = re.findall(r'"hiRes":"(https://[^"]+)"', html)
-        if not json_matches:
-            json_matches = re.findall(r'"large":"(https://[^"]+)"', html)
-        
-        for src in json_matches:
-            if 'http' in src and 'GIF' not in src.upper():
-                if src not in add_images and src != p.get('Main Image'):
-                    add_images.append(src)
+        images_dict_match = re.search(r'"colorImages":\s*{\s*"initial":\s*(\[\{.*?\}\])', html)
+        if images_dict_match:
+            img_data = json.loads(images_dict_match.group(1))
+            for item in img_data:
+                # Prioritize hiRes, fallback to large variant
+                src = item.get('hiRes') or item.get('large')
+                if src and 'http' in src and 'GIF' not in src.upper():
+                    if src not in add_images and src != p.get('Main Image'):
+                        add_images.append(src)
+        else:
+            # Fallback inline JSON fallback
+            json_matches = re.findall(r'"hiRes":"(https://[^"]+)"', html)
+            if not json_matches:
+                json_matches = re.findall(r'"large":"(https://[^"]+)"', html)
+            for src in json_matches:
+                if 'http' in src and 'GIF' not in src.upper():
+                    if src not in add_images and src != p.get('Main Image'):
+                        add_images.append(src)
     except Exception:
         pass
 
@@ -682,8 +705,12 @@ def fetch_product_details(url, existing_p, fetcher=None):
             amount = round(amount, 3)
             val = f"{int(amount) if amount.is_integer() else amount} {unit}"
             
-            if unit in ('ml', 'l'): p['Volume'] = val
-            else: p['Weight'] = val
+            if unit in ('ml', 'l'): 
+                p['Volume'] = val
+                p['Weight'] = ''
+            else: 
+                p['Weight'] = val
+                p['Volume'] = ''
             return True
             
         return False

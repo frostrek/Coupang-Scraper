@@ -1,35 +1,26 @@
-# High-Performance E-commerce Data Miner
+# High-Performance Amazon & E-commerce Scraper
 
-A production-grade, highly concurrent e-commerce scraping system designed to extract, normalize, and enrich product data using **Playwright/Scrapling** and **Google Gemini AI**.
-Specifically designed to match the precise data-ingestion constraints of modern platforms with absolute data accuracy.
+A production-grade, highly concurrent e-commerce scraping system designed to extract, normalize, and enrich product data using **Scrapling**, **Patchright**, and **Google Gemini AI**. 
 
-## 🌟 Core Capabilities
-- **Advanced Stealth Scraping**: Utilizes `Scrapling`, `Playwright`, and `curl_cffi` to evade bot protections, CAPTCHAs, and headless browser blocking.
-- **Multithreaded Execution**: Operates at 10x concurrency (`ThreadPoolExecutor`) for massively parallel product detail extraction without Out-Of-Memory (OOM) crashes.
-- **AI Data Normalization**: Integrates Gemini 2.5 Flash to sanitize HTML dump formats, standardize bullet-points, strictly cap descriptions to 70-80 words, and evaluate accurate "Adult Only" tags.
-- **Dynamic Bulk Database Prevention**: Hooks directly into a Supabase PostgreSQL instance via connection pooling. Operates bulk queries (`ILIKE ANY`) to drop read-loads by 99% and strictly prevent crawling duplicates.
-- **Micro-Precision Financials**: Enforces structured Amazon extraction logic to ensure "Sale Price" represents the crossed-out MRP, and "Discount Base Price" strictly represents the actual paid amount—ignoring all unit-price noise.
+Specifically hardened for Amazon (India/US) to achieve 100% data accuracy through PDP-level authority and AI-driven data sanitization.
 
-## 📦 Required Dependencies
-The application relies on several advanced scraping and parsing libraries.
-These are managed in `requirements.txt`:
-```txt
-flask>=3.0.0
-beautifulsoup4>=4.12.0
-openpyxl>=3.1.0
-scrapling>=0.4.3
-playwright>=1.49.1
-curl_cffi>=0.6.0
-browserforge>=1.2.0
-google-generativeai>=0.8.0
-psycopg2-binary>=2.9.0
-python-dotenv>=1.0.0
-```
+## 🌟 Key Features
+- **PDP-First Authority**: PDP (Product Detail Page) data strictly overrides search-level data to eliminate "phantom" prices or generic thumbnails.
+- **AI-Powered Normalization**: Utilizes Gemini 2.0 Flash to standardize weights/volumes, enforce description word counts, and classify categories.
+- **Anti-Blocking Stealth**: Uses `Scrapling` and `curl_cffi` to bypass TLS fingerprinting and bypass CAPTCHAs via advanced header rotation.
+- **Metric Exclusivity**: Forces a strict choice between Weight (g/kg) and Volume (ml/L) to prevent contradictory Excel data.
+- **Image Intelligence**: Automatically bypasses Amazon's lazy-load transparent GIF placeholders to capture high-resolution product imagery.
+
+## 📦 Prerequisites
+- **Python 3.10+**
+- **Google Gemini API Key** (for data sanitization)
+- **Supabase/PostgreSQL** (Optional - for duplicate prevention)
 
 ## 🛠 Installation & Setup
 
-1. **Clone the repository and enter the directory**:
+1. **Clone the repository**:
    ```bash
+   git clone <repository-url>
    cd Coupang-Scraper/scrapling
    ```
 
@@ -42,87 +33,49 @@ python-dotenv>=1.0.0
    source venv/bin/activate
    ```
 
-3. **Install Core Python Dependencies**:
+3. **Install Dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Install Headless Browser Binaries (CRITICAL)**:
-   This ensures `playwright` has the hidden chrome binaries required for Scrapling.
+4. **Install Browsers (CRITICAL)**:
    ```bash
    playwright install chromium
    ```
 
-## ⚙️ Configuration & Environment Variables
+## ⚙️ Configuration
 
-Create a file named `.env` in the root of the `scrapling` directory.
-You must provide the following variables for the system to boot successfully:
+Create a `.env` file in the `scrapling/` directory:
 
 ```env
-# Google Gemini 2.5 API Key (Used for LLM Data Formatting & Sanitization)
-GEMINI_API_KEY="AIzaSyXXXXXXXXXXXXXXXXXXXXXXXXX"
+# Essential for AI Processing
+GEMINI_API_KEY="your_api_key_here"
 
-# Supabase Postgres Connection String (Used for Duplicate Detection)
-# Recommended to use the transaction pooler port (6543)
-DATABASE_URL="postgresql://postgres.[ID]:[PASSWORD]@aws-0-eu-central-1.pooler.supabase.com:6543/postgres"
+# Database Configuration (Optional - set to empty string to skip)
+DATABASE_URL="postgresql://postgres:[password]@db.supabase.com:5432/postgres"
+
+# Concurrency Control (Default: 2-5 for free tier hosting)
+MAX_CONCURRENT_SCRAPES=2
 ```
 
-## 🗄️ Database Setup (Supabase)
-The application expects a `products` table to exist in your PostgreSQL database to track duplicate logic. 
-Run this SQL in your Supabase SQL Editor if you are setting up fresh:
+## 🚀 Usage
 
-```sql
-CREATE TABLE IF NOT EXISTS products (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    category TEXT,
-    product_name TEXT,
-    brand TEXT,
-    manufacturer TEXT,
-    sale_price TEXT,
-    discount_base_price TEXT,
-    stock INTEGER,
-    lead_time INTEGER,
-    detailed_description TEXT,
-    main_image TEXT,
-    search_keywords TEXT,
-    quantity INTEGER,
-    volume TEXT,
-    weight TEXT,
-    adult_only VARCHAR(10),
-    taxable VARCHAR(10),
-    parallel_import VARCHAR(10),
-    overseas_purchase VARCHAR(10),
-    sku VARCHAR(100) UNIQUE,
-    model_number VARCHAR(100),
-    barcode VARCHAR(100),
-    additional_image_1 TEXT,
-    additional_image_2 TEXT,
-    additional_image_3 TEXT,
-    additional_image_4 TEXT,
-    product_url TEXT,
-    scraped_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
--- Optimize duplicate checking queries
-CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
-CREATE INDEX IF NOT EXISTS idx_products_name ON products(product_name);
+Start the server:
+```bash
+python run.py
 ```
 
-## 🚀 Running the Application
+- Access the Dashboard at `http://127.0.0.1:5055`
+- Paste an Amazon Search URL (e.g., `https://www.amazon.in/s?k=protein+powder`)
+- Set the limit and click **Scrape**.
+- Downloads will appear in the `outputs/` folder.
 
-1. Make sure your virtual environment is activated.
-2. Start the web server:
-   ```bash
-   python run.py
-   ```
-3. Open your browser and navigate to:
-   `http://localhost:5000`
-4. Enter your Search Target URL e.g. `https://www.amazon.in/s?k=protein+powder` and specify the maximum output limit.
+## ☁️ Deployment
+For detailed instructions on deploying to AWS or Render, see:
+- [AWS EC2 Deployment Guide](AWS_EC2_DEPLOYMENT.md)
+- [Render Deployment Guide](RENDER_DEPLOYMENT.md)
 
-## 📊 Export Format
-The scraper generates standard `.xlsx` (Excel) files containing strict validations:
-- **Sale Price**: Captures the high M.R.P. (Crossed out price).
-- **Discount Base Price**: Captures the lowered selling price.
-- **Weight/Volume**: Intelligently parses specifications (`net quantity`) bridging into standard metric `g` or `ml`.
-- **Model Number**: Extracted from ASIN and rigidly suffixed with `-1`.
-- **Additional Images**: Captures high-resolution lifestyle/banner variants ignoring web-optimized thumbnails.
+## 📊 Data Mapping Rules
+- **Sale Price**: The current price the customer pays.
+- **Discount Base Price**: The original M.R.P. (crossed out). If no discount exists, this matches the Sale Price exactly.
+- **Metric Exclusivity**: If a product has both Weight and Volume, the AI prioritizes the most logical one (e.g., SOAP = Weight, HAIR OIL = Volume).
