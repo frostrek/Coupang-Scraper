@@ -19,7 +19,7 @@ from . import db
 # ─────────────────────────────────────────────────────────────────────────────
 # CONCURRENCY CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
-MAX_CONCURRENT_PRODUCTS = 10  # Process 10 products in parallel (speed boost)
+MAX_CONCURRENT_PRODUCTS = 15  # Process 15 products in parallel (speed boost)
 
 # Initialize header generator for extreme stealth
 header_gen = HeaderGenerator()
@@ -151,12 +151,16 @@ def _pick(container, selectors, transform=None):
     return ''
 
 def extract_single_product(c, base_url):
-    """Extract product data from a single product container.
+    """Extract product data from a single product container."""
+    # Logic Version: 2.1 (Hardened for Price & Weight)
+    # print("[DataHarvest] Processing product...")
+
+    # Initialize all variables early to avoid UnboundLocalError in specific Python versions
+    mrp = None
+    disc_price = None
+    mrp_el = None
+    disc_price_el = None
     
-    PRICE FIELD SEMANTICS (Coupang Upload Standard):
-        Sale Price         = MRP / Original price BEFORE discount (e.g. ₹275, crossed out)
-        Discount Base Price = Current price AFTER discount (e.g. ₹220, what buyer pays)
-    """
     # Skip sponsored/ad products
     sponsored_selectors = [
         '.s-sponsored-label-text',
@@ -225,61 +229,105 @@ def extract_single_product(c, base_url):
         if a:
             name = clean_text(a['title'])
     if name:
-        p['Product Name'] = name[:220]
+        # ── Strip unit-price contamination (e.g. "₹98/100gm", "(Rs.275/100ml)") ──
+        name = re.sub(r'[\(\[]?\s*[₹$€£¥]?\s*[Rr][Ss]\.?\s*\d[\d,.]*\s*(?:per|/)\s*\d*\s*(?:gm?|gram|grams|kg|ml|l|oz|lb|unit|piece|count|tablet|capsule|sachet|strip|pack)\s*[\)\]]?', '', name, flags=re.I).strip()
+        name = re.sub(r'[\(\[]?\s*[₹$€£¥]\s*\d[\d,.]*\s*/\s*\d*\s*(?:gm?|gram|grams|kg|ml|l|oz|lb|unit|piece|count|tablet|capsule|sachet|strip|pack)\s*[\)\]]?', '', name, flags=re.I).strip()
+        # Remove trailing orphan parentheses/brackets after cleanup
+        name = re.sub(r'\(\s*\)', '', name).strip()
+        name = re.sub(r'\[\s*\]', '', name).strip()
+        # ── Cap at nearest word under 100 CHARACTERS max ──
+        if len(name) > 100:
+            trunc = name[:100]
+            last_spc = trunc.rfind(' ')
+            if last_spc > -1:
+                name = trunc[:last_spc].strip()
+            else:
+                name = trunc.strip()
+        p['Product Name'] = name
 
     # ─────────────────────────────────────────────────────────────────────
-    #  SALE PRICE = MRP / Original price (crossed-out, before discount)
+    #  DISCOUNT BASE PRICE = MRP / Original price (crossed-out, before discount)
     # ─────────────────────────────────────────────────────────────────────
-    mrp = _pick(c, [
-        # Amazon: strikethrough / original price selectors
+    mrp_el = None
+    for sel in [
+        '#corePriceDisplay_desktop_feature_div .a-text-price span.a-offscreen',
+        '#corePrice_desktop .a-text-price span.a-offscreen',
+        '#price .a-text-price span.a-offscreen',
+        'td.compareAtPrice span.a-offscreen',
         'span.a-price.a-text-price span.a-offscreen',
         '.a-text-price span.a-offscreen',
-        # Generic: original / old / MRP selectors
-        '._3I9_wc',
         '[class*="original-price"]', '[class*="old-price"]', '[class*="mrp"]',
         '[class*="was-price"]', '[class*="compare-price"]', '[class*="list-price"]',
-        'del', 's', 'strike',
-    ], lambda el: extract_price(el.get_text()))
-    if mrp and re.search(r'\d', mrp):
-        p['Sale Price'] = mrp
+    ]:
+        for el in c.select(sel):
+            # MUST IGNORE carousel/similar items to prevent stealing MRP from related products
+            if el.find_parent(class_=re.compile(r'carousel|sponsored|similar|recommendation', re.I)):
+                continue
+            mrp_el = el
+            break
+        if mrp_el:
+            break
+
+    mrp = None
+    if mrp_el:
+        val = extract_price(mrp_el.get_text())
+        if val and re.search(r'\d', val):
+            mrp = val
+            p['Discount Base Price'] = mrp
 
     # ─────────────────────────────────────────────────────────────────────
-    #  DISCOUNT BASE PRICE = Current discounted price (what buyer pays)
+    #  SALE PRICE = Current discounted price (what buyer pays)
     # ─────────────────────────────────────────────────────────────────────
-    disc_price = None
+    disc_price_el = None
     for sel in [
         # Amazon: main displayed price (the big bold number)
+        '#corePriceDisplay_desktop_feature_div span.a-price[data-a-size="xl"] span.a-offscreen',
         'span.a-price[data-a-size="xl"] span.a-offscreen',
         'span.a-price[data-a-size="l"] span.a-offscreen',
         'span.a-price[data-a-size="b"] span.a-offscreen',
         'span.priceToPay span.a-offscreen',
+        '.a-price:not([data-a-strike="true"]):not(.a-text-strike) span.a-offscreen',
         'span.a-price-whole',
         # Indian e-commerce
         '._30jeq3', '._1_WHN1', '._16Jk6d',
     ]:
-        el = c.select_one(sel)
-        if el:
-            val = extract_price(el.get_text())
-            if val and re.search(r'\d', val):
-                disc_price = val
-                break
-                
-    if disc_price and re.search(r'\d', disc_price):
-        p['Discount Base Price'] = disc_price
+        for el in c.select(sel):
+            # STRICT IGNORANCE of carousels/sponsors
+            if el.find_parent(class_=re.compile(r'carousel|sponsored|similar|recommendation', re.I)):
+                continue
+            # STRICT UNIT PRICE REJECTION
+            # If the price is nested inside a secondary/small span that contains a slash, it's a unit price (e.g. ₹98 / 100ml)
+            parent_sec = el.find_parent('span', class_=re.compile(r'a-color-secondary|a-size-small|a-size-mini'))
+            if parent_sec and '/' in parent_sec.get_text():
+                continue
+            disc_price_el = el
+            break
+        if disc_price_el:
+            break
+            
+    if disc_price_el:
+        val = extract_price(disc_price_el.get_text())
+        if val and re.search(r'\d', val):
+            disc_price = val
+            p['Sale Price'] = disc_price
 
     # ─────────────────────────────────────────────────────────────────────
-    #  PRICE VALIDATION: Discount must be ≤ Sale Price (MRP)
-    #  If discounted is somehow larger, they were scraped from wrong selectors → swap
+    #  PRICE VALIDATION: Discount (Sale Price) must be ≤ Original (Discount Base Price)
+    #  If Sale Price is somehow larger, they were scraped from wrong selectors → swap
     # ─────────────────────────────────────────────────────────────────────
     if p.get('Sale Price') and p.get('Discount Base Price'):
         try:
-            sale_val = float(re.sub(r'[^\d.]', '', p['Sale Price']))
-            disc_val = float(re.sub(r'[^\d.]', '', p['Discount Base Price']))
-            if disc_val > sale_val:
-                # Discounted should never exceed MRP — selectors grabbed them backwards
-                p['Sale Price'], p['Discount Base Price'] = p['Discount Base Price'], p['Sale Price']
-        except ValueError:
-            pass
+            # Strip all characters except digits and decimal point
+            s_clean = re.sub(r'[^\d.]', '', p['Sale Price'])
+            d_clean = re.sub(r'[^\d.]', '', p['Discount Base Price'])
+            if s_clean and d_clean:
+                sale_val = float(s_clean)
+                disc_val = float(d_clean)
+                if sale_val > disc_val:
+                    # Current price should never exceed MRP — selectors grabbed them backwards
+                    p['Sale Price'], p['Discount Base Price'] = p['Discount Base Price'], p['Sale Price']
+        except Exception as e:
+            print(f"[Price Cleaner] Warning: {e}")
 
     # If only one price is found (no discount), set both fields to exactly the same price
     if not p.get('Sale Price') and p.get('Discount Base Price'):
@@ -356,12 +404,16 @@ def fetch_product_details(url, existing_p, fetcher=None):
         'span.a-text-strike',
         'del span.a-offscreen',
     ]:
-        el = soup.select_one(sel)
-        if el:
+        for el in soup.select(sel):
+            # Global exclusion for carousels, sponsored sections, and sidebars (Recent Items)
+            if el.find_parent(class_=re.compile(r'carousel|sponsored|similar|recommendation|rhf-border|rhf-results-|percolate-', re.I)) or el.find_parent(id=re.compile(r'rhf|HLCXComparisonWidget|similarFeatures|percolate|recommendations', re.I)):
+                continue
             val = extract_price(el.get_text())
             if val and re.search(r'\d', val):
                 pdp_mrp = val
                 break
+        if pdp_mrp:
+            break
 
     # Fallback: look for "M.R.P.:" text pattern specifically (Amazon India)
     if not pdp_mrp:
@@ -386,29 +438,49 @@ def fetch_product_details(url, existing_p, fetcher=None):
         '.a-price[data-a-size="b"] span.a-offscreen',
         '#corePrice_feature_div span.a-offscreen',
         '#corePriceDisplay_desktop_feature_div span.a-offscreen',
+        '.a-price:not([data-a-strike="true"]):not(.a-text-strike) span.a-offscreen',
     ]:
-        el = soup.select_one(sel)
-        if el:
+        for el in soup.select(sel):
+            # Global exclusion for carousels, sponsored sections, and sidebars
+            if el.find_parent(class_=re.compile(r'carousel|sponsored|similar|recommendation|rhf-border|rhf-results-|percolate-', re.I)) or el.find_parent(id=re.compile(r'rhf|HLCXComparisonWidget|similarFeatures|percolate|recommendations', re.I)):
+                continue
+            if el.find_parent(id=re.compile(r'delivery|price-shipping', re.I)):
+                continue
+            # STRICT UNIT PRICE REJECTION
+            parent_sec = el.find_parent('span', class_=re.compile(r'a-color-secondary|a-size-small|a-size-mini'))
+            if parent_sec and '/' in parent_sec.get_text():
+                continue
+                
             val = extract_price(el.get_text())
             if val and re.search(r'\d', val):
                 pdp_disc = val
                 break
+        if pdp_disc:
+            break
 
     # Apply PDP prices (override SERP prices only if we found better data)
+    # Correct PDP Price Mapping:
+    # pdp_mrp = Original Price / Strike Price (MSRP) -> Discount Base Price
+    # pdp_disc = Final Price / Current Price (Buyer Pays) -> Sale Price
     if pdp_mrp:
-        p['Sale Price'] = pdp_mrp
+        p['Discount Base Price'] = pdp_mrp
     if pdp_disc:
-        p['Discount Base Price'] = pdp_disc
+        p['Sale Price'] = pdp_disc
 
     # Re-validate: Discount must be ≤ Sale Price
     if p.get('Sale Price') and p.get('Discount Base Price'):
         try:
-            sale_val = float(re.sub(r'[^\d.]', '', p['Sale Price']))
-            disc_val = float(re.sub(r'[^\d.]', '', p['Discount Base Price']))
-            if disc_val > sale_val:
-                p['Sale Price'], p['Discount Base Price'] = p['Discount Base Price'], p['Sale Price']
-        except ValueError:
-            pass
+            # Strip all characters except digits and decimal point
+            s_clean = re.sub(r'[^\d.]', '', p['Sale Price'])
+            d_clean = re.sub(r'[^\d.]', '', p['Discount Base Price'])
+            if s_clean and d_clean:
+                sale_val = float(s_clean)
+                disc_val = float(d_clean)
+                # Ensure Discount Base Price (MSRP) is the LARGER value
+                if sale_val > disc_val:
+                    p['Sale Price'], p['Discount Base Price'] = p['Discount Base Price'], p['Sale Price']
+        except Exception as e:
+            print(f"[PDP Price Cleaner] Warning: {e}")
 
     # If only one price found (no discount), set both fields to the same value
     if not p.get('Sale Price') and p.get('Discount Base Price'):
@@ -568,21 +640,53 @@ def fetch_product_details(url, existing_p, fetcher=None):
     #  VOLUME / WEIGHT EXTRACTION (Strict Priority: Specs > Title > Body)
     # ─────────────────────────────────────────────────────────────────────
     def _parse_and_assign_metric(text_chunk):
-        """Attempts to parse metrics and returns True if successful."""
-        m = re.search(r'(\d+(?:\.\d+)?)\s*(kg|g|gm|ml|l|litre|liters|oz|lb)\b', text_chunk, re.I)
-        if not m: return False
+        """Attempts to parse metrics and returns True if successful.
         
-        amount, unit = float(m.group(1)), m.group(2).lower()
-        if unit == 'kg': amount, unit = amount * 1000, 'g'
-        elif unit in ('l', 'litre', 'liters'): amount, unit = amount * 1000, 'ml'
-        elif unit == 'gm': unit = 'g'
+        Unit normalization rules:
+        - Weight: g/gram/grams → gm, kg/kilogram stays kg (but sub-1kg converts to gm)
+        - Volume: ml stays ml, l/litre/liters → ml (converted)
+        """
+        for m in re.finditer(r'\b(\d+(?:\.\d+)?)\s*(kg|kilogram|kilograms|g|gm|gram|grams|ml|millilitre|milliliter|l|litre|liter|liters|litres|oz|lb)\b', text_chunk, re.I):
+            amount, unit = float(m.group(1)), m.group(2).lower()
             
-        amount = round(amount, 3)
-        val = f"{int(amount) if amount.is_integer() else amount} {unit}"
-        
-        if unit in ('ml', 'l'): p['Volume'] = val
-        else: p['Weight'] = val
-        return True
+            # Context-Aware Rejection: Reject 'g'/'gm' if amount is 4.0 or 5.0 (network generations)
+            # unless explicitly preceded by 'weight' or 'mass' keywords
+            if unit in ('g', 'gm', 'gram') and amount in [2.0, 3.0, 4.0, 5.0, 6.0]:
+                context = text_chunk.lower()
+                # If '5g' or '4g' is present, check for connectivity-related words
+                if re.search(r'connectivity|network|bands|sim|volte|generation|frequency', context):
+                    continue
+                # If none of the weight keywords are present, reject it as a metric
+                if not re.search(r'weight|mass|net quantity|item weight', context):
+                    continue
+            
+            # ── Weight normalization ──
+            if unit in ('kg', 'kilogram', 'kilograms'):
+                if amount < 1:  # Sub-1kg → convert to grams (0.2kg → 200 gm)
+                    amount = amount * 1000
+                    unit = 'gm'
+                else:
+                    unit = 'kg'
+            elif unit in ('g', 'gram', 'grams', 'gm'):
+                unit = 'gm'
+            # ── Volume normalization ──
+            elif unit in ('l', 'litre', 'liter', 'liters', 'litres'):
+                if amount < 1:  # Sub-1L → convert to ml (0.5l → 500 ml)
+                    amount = amount * 1000
+                    unit = 'ml'
+                else:
+                    unit = 'l'
+            elif unit in ('ml', 'millilitre', 'milliliter'):
+                unit = 'ml'
+                
+            amount = round(amount, 3)
+            val = f"{int(amount) if amount.is_integer() else amount} {unit}"
+            
+            if unit in ('ml', 'l'): p['Volume'] = val
+            else: p['Weight'] = val
+            return True
+            
+        return False
 
     # Priority 1: Check actual DB Spec tables first (Highest accuracy)
     mapped_specs = False
@@ -603,14 +707,14 @@ def fetch_product_details(url, existing_p, fetcher=None):
         
     p['_raw_specs'] = p.get('Product Name', '') + " " + " ".join(spec_data.values())
 
-    # Generate Search Keywords from product name
+    # Generate Search Keywords from product name (feed up to 25 to Gemini for 20-keyword output)
     if p.get('Product Name'):
         words = p['Product Name'].lower().replace(',', '').split()
         unique_words = []
         for w in words:
             if w not in unique_words and len(w) > 2:
                 unique_words.append(w)
-        p['Search Keywords'] = ', '.join(unique_words[:15])
+        p['Search Keywords'] = ', '.join(unique_words[:25])
 
     return p
 
@@ -635,7 +739,7 @@ def _process_single_product(prod, job_fetcher, log_fn):
             log_fn(f"✨ Perfecting with Gemini: {pname[:30]}...")
             prod = sanitize_product_data(prod)
             
-            time.sleep(random.uniform(0.1, 0.3))  # Reduced from 0.3-0.8
+            # Removed arbitrary sleep to maximize processing speed
     except Exception as pdp_err:
         log_fn(f"⚠️ Error enriching {pname[:30]}: {pdp_err}. Using basic data.", 'warn')
 
