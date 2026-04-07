@@ -7,7 +7,7 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-# Exact column order matching the user's CSV template
+# Exact column order  matching the user's CSV template
 CSV_TEMPLATE_COLUMNS = [
     'Category',
     'Product Name',
