@@ -1,0 +1,57 @@
+name: Scrapper Backend — CI/CD
+
+on:
+  push:
+    branches:
+      - main   # change if your branch is different
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy Scrapper to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      # ─── Step 1: Checkout code ───────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ─── Step 2: SSH into EC2 and deploy ─────────────────────────────────
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          timeout: 600s
+          script: |
+            echo "📥 Pulling latest Scrapper code..."
+            cd /home/ubuntu/scrapper/Coupang-Scraper/scrapling
+
+            git config --global --add safe.directory /home/ubuntu/scrapper/Coupang-Scraper/scrapling
+            git fetch origin
+            git checkout main
+            git pull origin main
+
+            echo "🐍 Activating virtual environment..."
+            source venv/bin/activate
+
+            echo "📦 Installing dependencies..."
+            pip install -r requirements.txt
+
+            echo "🎭 Installing Playwright (if needed)..."
+            playwright install chromium
+
+            echo "🔄 Restarting Scrapper service..."
+            sudo systemctl restart scraper
+
+            echo "⏳ Waiting for service to be ready..."
+            sleep 10
+
+            echo "🔍 Health check..."
+            curl -f http://localhost:5055 || {
+              echo "❌ Scrapper health check failed!"
+              exit 1
+            }
+
+            echo "✅ Scrapper deployment successful!"
