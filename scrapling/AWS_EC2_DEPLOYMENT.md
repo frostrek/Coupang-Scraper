@@ -1,83 +1,139 @@
 # AWS EC2 Deployment Guide
 
-Follow these steps to deploy the Amazon Scraper on an AWS EC2 instance (recommended: **Ubuntu 22.04 LTS**).
+This guide will walk you through deploying the Coupang-Scraper onto an AWS EC2 instance. Because the scraper runs a full browser environment via Playwright and processes AI tasks, we recommend using at least a `t3.small` or `t3.medium` instance.
 
-## 1. Launch EC2 Instance
-- **Instance Type**: `t3.medium` or higher (Scraping with browsers requires at least 4GB RAM).
-- **Storage**: 20GB+ SSD.
-- **Security Group**:
-  - Allow **SSH** (Port 22) from your IP.
-  - Allow **Custom TCP** (Port 5055) from anywhere (or your IP) to access the dashboard.
+## 1. Instance Setup
+1. Log in to your AWS Management Console and navigate to EC2.
+2. Click **Launch Instance**.
+3. **AMI**: Select **Ubuntu Server 22.04 LTS**.
+4. **Instance Type**: Select `t3.small` (2 vCPUs, 2 GB RAM) or higher.
+5. **Key Pair**: Create or select an existing key pair to securely connect via SSH.
+6. **Network Settings**:
+   - Check **Allow SSH traffic from** (Anywhere or My IP).
+   - Check **Allow HTTP traffic from the internet**.
+   - Check **Allow HTTPS traffic from the internet** (if you plan to set up SSL/TLS).
 
-## 2. System Preparation
-Connect to your instance via SSH and run:
+## 2. Connect and Prepare the OS
+SSH into your instance using your key pair:
 ```bash
-sudo apt update && sudo apt upgrade -y
-sudo apt install python3-pip python3-venv git libpq-dev -y
+ssh -i /path/to/your-key.pem ubuntu@<your-ec2-public-ip>
 ```
 
-## 3. Clone and Setup App
+Update system packages and install required foundational dependencies:
 ```bash
-git clone <your-repo-url>
-cd Coupang-Scraper/scrapling
+sudo apt update
+sudo apt upgrade -y
+sudo apt install -y python3-pip python3-venv git nginx
+```
 
-# Setup Virtual Environment
+## 3. Clone and Setup Environment
+Navigate to `/var/www/` or your home directory, and clone the repository:
+
+```bash
+git clone <your-repository-url> scraper
+cd scraper/scrapling
+```
+
+Create and activate a virtual environment:
+```bash
 python3 -m venv venv
 source venv/bin/activate
-
-# Install Dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# Install Playwright/Patchright Browsers
-playwright install chromium
-sudo playwright install-deps
 ```
 
-## 4. Environment Configuration
-Create the `.env` file:
+Install the dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+**Crucial Step for Playwright:**
+Install the browsers and Linux OS dependencies required by Playwright:
+```bash
+playwright install chromium
+sudo npx playwright install-deps
+```
+
+## 4. Configuration
+Create your `.env` file from a template or securely paste it:
 ```bash
 nano .env
 ```
-Paste your configuration:
+Populate it with:
 ```env
-GEMINI_API_KEY="your_api_key"
-DATABASE_URL="your_supabase_url"
+GEMINI_API_KEY="your_api_key_here"
+DATABASE_URL="postgresql://..." # Or leave empty if not used
+MAX_CONCURRENT_SCRAPES=2
 ```
 
-## 5. Production Setup (Gunicorn + Systemd)
+## 5. Setup Gunicorn as a systemd Service
+We will use `systemd` to keep Gunicorn running continuously and automatically restart it on crashes.
 
-### Create a Systemd Service
+Create a new service file:
 ```bash
 sudo nano /etc/systemd/system/scraper.service
 ```
-Paste the following (Replace `ubuntu` and path if different):
+
+Add the following configuration (Adjust paths if you cloned into a different directory):
 ```ini
 [Unit]
-Description=Amazon Scraper Flask App
+Description=Gunicorn instance to serve Coupang-Scraper
 After=network.target
 
 [Service]
 User=ubuntu
 Group=www-data
-WorkingDirectory=/home/ubuntu/Coupang-Scraper/scrapling
-Environment="PATH=/home/ubuntu/Coupang-Scraper/scrapling/venv/bin"
-EnvironmentFile=/home/ubuntu/Coupang-Scraper/scrapling/.env
-ExecStart=/home/ubuntu/Coupang-Scraper/scrapling/venv/bin/gunicorn --workers 4 --bind 0.0.0.0:5055 run:app
+WorkingDirectory=/home/ubuntu/scraper/scrapling
+Environment="PATH=/home/ubuntu/scraper/scrapling/venv/bin"
+ExecStart=/home/ubuntu/scraper/scrapling/venv/bin/gunicorn --worker-class gevent --workers 2 --bind 127.0.0.1:5055 run:app
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-### Start the Service
+Enable and start the service:
 ```bash
-sudo systemctl daemon-reload
 sudo systemctl start scraper
 sudo systemctl enable scraper
+sudo systemctl status scraper
+sudo journalctl -u scraper -f   # To observe logs 
 ```
 
-## 6. Access the Dashboard
-Navigate to `http://your-ec2-public-ip:5055` in your browser.
+## 6. Setup Nginx Reverse Proxy
+Now configure Nginx to route internet traffic on port 80 to our local Gunicorn server.
 
-> [!IMPORTANT]
-> If the scraper is blocked by Amazon frequently on EC2, consider adding a residential proxy provider in the Scrapling configuration or rotating your Elastic IP.
+Create a new Nginx configuration block:
+```bash
+sudo nano /etc/nginx/sites-available/scraper
+```
+
+Paste the following:
+```nginx
+server {
+    listen 80;
+    server_name your_domain_or_public_ip;
+
+    location / {
+        proxy_pass http://127.0.0.1:5055;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_addrs;
+        
+        # Extended timeouts for long-running scraping requests
+        proxy_read_timeout 300;
+        proxy_connect_timeout 300;
+        proxy_send_timeout 300;
+    }
+}
+```
+
+Link, test, and restart Nginx:
+```bash
+sudo ln -s /etc/nginx/sites-available/scraper /etc/nginx/sites-enabled
+sudo nginx -t
+sudo systemctl restart nginx
+```
+
+## 7. Next Steps
+Your API and Dashboard should now be fully live on the EC2 instance's IP address!
+
+- We strongly recommend setting up **SSL with Certbot** (Let's Encrypt) to secure your `.env` secrets and requests.
+- Monitor your background workers using `htop` to ensure the instances do not trigger OOM (Out-Of-Memory) kills from Playwright browser usage.

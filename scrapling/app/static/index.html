@@ -801,6 +801,68 @@
   }
   .fade-up { animation: fadeUp 0.35s ease forwards; }
 
+  /* ─── TOGGLE SWITCH ─── */
+  .toggle-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px 18px; background: var(--surface2);
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    transition: all 0.2s;
+  }
+  .toggle-row.active { border-color: var(--accent); background: var(--accent-bg); }
+  .toggle-switch {
+    position: relative; width: 48px; height: 26px; flex-shrink: 0;
+  }
+  .toggle-switch input { opacity: 0; width: 0; height: 0; }
+  .toggle-slider {
+    position: absolute; inset: 0; background: var(--border2);
+    border-radius: 26px; cursor: pointer; transition: 0.25s;
+  }
+  .toggle-slider::before {
+    content: ''; position: absolute; width: 20px; height: 20px;
+    left: 3px; bottom: 3px; background: #fff;
+    border-radius: 50%; transition: 0.25s;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+  .toggle-switch input:checked + .toggle-slider { background: var(--accent); }
+  .toggle-switch input:checked + .toggle-slider::before { transform: translateX(22px); }
+  .toggle-info { flex: 1; }
+  .toggle-label { font-size: 13px; font-weight: 600; color: var(--text); }
+  .toggle-desc { font-size: 12px; color: var(--text3); margin-top: 2px; }
+
+  /* ─── PINCODE FIELD ─── */
+  .pincode-section { display: none; margin-top: 12px; }
+  .pincode-section.visible { display: block; animation: fadeUp 0.25s ease; }
+  .pincode-row { display: flex; gap: 10px; align-items: flex-end; }
+  .pincode-row .field { flex: 1; }
+  .field-hint { font-size: 11px; color: var(--text4); margin-top: 4px; }
+  .field-error { font-size: 11px; color: var(--error); margin-top: 4px; display: none; }
+  .field-error.show { display: block; }
+  input.input-error { border-color: var(--error); box-shadow: 0 0 0 3px rgba(239,68,68,0.1); }
+  input.input-success { border-color: var(--success); box-shadow: 0 0 0 3px rgba(16,185,129,0.1); }
+
+  /* ─── ETA ESTIMATE ─── */
+  .eta-estimate {
+    display: none; margin-top: 14px; padding: 12px 16px;
+    background: linear-gradient(135deg, rgba(249,115,22,0.06), rgba(249,115,22,0.02));
+    border: 1px solid rgba(249,115,22,0.15); border-radius: var(--radius-xs);
+    font-size: 13px; color: var(--text2);
+  }
+  .eta-estimate.visible { display: flex; align-items: center; gap: 10px; }
+  .eta-estimate .eta-icon { font-size: 18px; }
+  .eta-estimate .eta-text b { color: var(--text); }
+
+  /* ─── PROGRESS STATS ─── */
+  .progress-stats {
+    display: flex; gap: 12px; margin-top: 14px; flex-wrap: wrap;
+  }
+  .pstat {
+    font-size: 12px; padding: 5px 12px; border-radius: 100px;
+    background: var(--surface2); border: 1px solid var(--border);
+    color: var(--text2); font-family: 'JetBrains Mono', monospace;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .pstat .pstat-val { font-weight: 600; color: var(--text); }
+
   /* ─── RESPONSIVE ─── */
   @media (max-width: 640px) {
     .wrap, .wrap-wide { padding: 0 16px 60px; }
@@ -811,6 +873,7 @@
     .header-right { margin-left: 0; }
     .table-header { flex-direction: column; align-items: flex-start; }
     .table-search { width: 100%; }
+    .pincode-row { flex-direction: column; }
   }
 </style>
 </head>
@@ -867,8 +930,36 @@
 
       <div class="field full">
         <label>Max Products <span class="optional">to scrape</span></label>
-        <input type="number" id="max-slider" min="1" max="10000" value="10" placeholder="e.g. 10" />
+        <input type="number" id="max-slider" min="1" max="10000" value="10" placeholder="e.g. 10" oninput="updateETA()" />
       </div>
+
+      <div class="field full">
+        <div class="toggle-row" id="delivery-toggle-row">
+          <label class="toggle-switch">
+            <input type="checkbox" id="delivery-toggle" onchange="toggleDeliveryFilter()" />
+            <span class="toggle-slider"></span>
+          </label>
+          <div class="toggle-info">
+            <div class="toggle-label">🚚 Fast Delivery Filter (2–4 Days)</div>
+            <div class="toggle-desc">Only scrape products deliverable within 2-4 days to your pincode</div>
+          </div>
+        </div>
+        <div class="pincode-section" id="pincode-section">
+          <div class="pincode-row">
+            <div class="field">
+              <label>Delivery Pincode <span class="optional">*required</span></label>
+              <input type="text" id="pincode-input" placeholder="e.g. 110001" maxlength="10" oninput="validatePincode()" />
+              <div class="field-hint" id="pincode-hint">Enter your 6-digit pincode (India) or 5-digit ZIP (US)</div>
+              <div class="field-error" id="pincode-error"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="eta-estimate" id="eta-estimate">
+      <span class="eta-icon">⏱️</span>
+      <div class="eta-text">Estimated time: <b id="eta-text-val">~1 min</b> for <span id="eta-prod-count">10</span> products</div>
     </div>
 
     <div class="info-box">
@@ -894,15 +985,23 @@
           <span class="status-badge running" id="status-badge">
             <span class="dot pulse"></span> Running
           </span>
+          <span id="eta-badge" style="display:none; font-size:12px; font-weight:500; font-family:'JetBrains Mono',monospace; margin-left:8px; padding:3px 8px; border-radius:100px; background:var(--surface2); color:var(--text2); border:1px solid var(--border);">ETA: --:--</span>
         </div>
       </div>
       <div style="text-align:right">
         <div class="progress-count"><span id="prod-count">0</span><small>products</small></div>
+        <div id="prog-total-avail" style="font-size:12px; color:var(--text3); font-weight:500; margin-top:4px; display:none;">~<span id="prod-tot">0</span> available total</div>
       </div>
     </div>
 
     <div class="progress-bar-wrap">
       <div class="progress-bar-fill" id="prog-bar"></div>
+    </div>
+
+    <div class="progress-stats" id="progress-stats">
+      <div class="pstat">⏱ Elapsed: <span class="pstat-val" id="stat-elapsed">0:00</span></div>
+      <div class="pstat">⚡ Speed: <span class="pstat-val" id="stat-speed">—</span>/min</div>
+      <div class="pstat" id="stat-delivery-wrap" style="display:none;">🚚 Filtered: <span class="pstat-val" id="stat-delivery">0</span></div>
     </div>
 
     <div class="log-wrap" id="log-box">
@@ -1014,9 +1113,9 @@ let filteredProducts = [];
 let tablePage = 1;
 const PAGE_SIZE = 25;
 
-// Display columns in a friendly order
 const TABLE_COLUMNS = [
   { key: 'Main Image', label: 'Image', type: 'image' },
+  { key: 'Additional Images', label: 'Additional Images', type: 'images' },
   { key: 'Product Name', label: 'Product Name', type: 'name' },
   { key: 'Brand', label: 'Brand', type: 'brand' },
   { key: 'Sale Price', label: 'Price', type: 'price' },
@@ -1029,47 +1128,126 @@ const TABLE_COLUMNS = [
   { key: 'Search Keywords', label: 'Keywords', type: 'text' },
 ];
 
-function setUrl(u) { document.getElementById('url-input').value = u; }
+function setUrl(u) { document.getElementById('url-input').value = u; updatePincodeHint(); updateETA(); }
 function setKeyword(k) { document.getElementById('keyword-input').value = k; }
+
+// ── DELIVERY TOGGLE ──
+function toggleDeliveryFilter() {
+  const on = document.getElementById('delivery-toggle').checked;
+  const row = document.getElementById('delivery-toggle-row');
+  const section = document.getElementById('pincode-section');
+  row.classList.toggle('active', on);
+  section.classList.toggle('visible', on);
+  if (on) {
+    document.getElementById('pincode-input').focus();
+    updatePincodeHint();
+  }
+  updateETA();
+}
+
+function updatePincodeHint() {
+  const url = document.getElementById('url-input').value.toLowerCase();
+  const hint = document.getElementById('pincode-hint');
+  if (url.includes('amazon.in') || url.includes('flipkart')) {
+    hint.textContent = 'Enter your 6-digit Indian pincode';
+  } else if (url.includes('amazon.com') && !url.includes('amazon.com.')) {
+    hint.textContent = 'Enter your 5-digit US ZIP code';
+  } else {
+    hint.textContent = 'Enter your delivery pincode/ZIP code';
+  }
+}
+
+function validatePincode() {
+  const pin = document.getElementById('pincode-input').value.trim();
+  const url = document.getElementById('url-input').value.toLowerCase();
+  const input = document.getElementById('pincode-input');
+  const errEl = document.getElementById('pincode-error');
+  input.classList.remove('input-error', 'input-success');
+  errEl.classList.remove('show');
+  if (!pin) return false;
+  const digits = pin.replace(/\D/g, '');
+  if (digits !== pin) {
+    input.classList.add('input-error');
+    errEl.textContent = 'Only digits allowed'; errEl.classList.add('show');
+    return false;
+  }
+  if ((url.includes('amazon.in') || url.includes('flipkart')) && digits.length !== 6) {
+    input.classList.add('input-error');
+    errEl.textContent = 'Indian pincode must be exactly 6 digits'; errEl.classList.add('show');
+    return false;
+  }
+  if (url.includes('amazon.com') && !url.includes('amazon.com.') && digits.length !== 5) {
+    input.classList.add('input-error');
+    errEl.textContent = 'US ZIP code must be exactly 5 digits'; errEl.classList.add('show');
+    return false;
+  }
+  input.classList.add('input-success');
+  return true;
+}
+
+function updateETA() {
+  const count = parseInt(document.getElementById('max-slider').value) || 0;
+  const deliveryOn = document.getElementById('delivery-toggle').checked;
+  const el = document.getElementById('eta-estimate');
+  if (count > 0) {
+    el.classList.add('visible');
+    // ~8s per product base, +3s if delivery filter is on (extra PDP re-fetch)
+    const secPerProd = deliveryOn ? 11 : 8;
+    const totalSec = count * secPerProd;
+    const mins = Math.ceil(totalSec / 60);
+    const etaText = mins < 2 ? '~1 min' : mins < 60 ? `~${mins} mins` : `~${Math.round(mins/60*10)/10} hrs`;
+    document.getElementById('eta-text-val').textContent = etaText;
+    document.getElementById('eta-prod-count').textContent = count;
+  } else {
+    el.classList.remove('visible');
+  }
+}
 
 async function startScrape() {
   const url = document.getElementById('url-input').value.trim();
   const keyword = document.getElementById('keyword-input').value.trim();
   const max = document.getElementById('max-slider').value;
+  const deliveryFilter = document.getElementById('delivery-toggle').checked;
+  const pincode = document.getElementById('pincode-input').value.trim();
 
   if (!url) { flash('url-input', 'Please enter a website URL'); return; }
   if (!keyword) { flash('keyword-input', 'Please enter a search keyword'); return; }
+  if (deliveryFilter) {
+    if (!pincode) { flash('pincode-input', 'Pincode is required'); return; }
+    if (!validatePincode()) return;
+  }
 
   document.getElementById('scrape-btn').disabled = true;
   document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Starting...';
 
-  hide('result-section');
-  hide('error-section');
-  hide('data-section');
-  logCache = [];
-  allProducts = [];
-  filteredProducts = [];
+  hide('result-section'); hide('error-section'); hide('data-section');
+  logCache = []; allProducts = []; filteredProducts = [];
   document.getElementById('log-box').innerHTML = '';
   document.getElementById('prod-count').textContent = '0';
   document.getElementById('prog-bar').style.width = '0%';
   document.getElementById('prog-site').textContent = url;
+  document.getElementById('stat-elapsed').textContent = '0:00';
+  document.getElementById('stat-speed').textContent = '—';
+  if (deliveryFilter) {
+    document.getElementById('stat-delivery-wrap').style.display = 'inline-flex';
+    document.getElementById('stat-delivery').textContent = '0';
+  } else {
+    document.getElementById('stat-delivery-wrap').style.display = 'none';
+  }
 
   try {
     const res = await fetch('/api/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, keyword, max_products: parseInt(max) })
+      body: JSON.stringify({ url, keyword, max_products: parseInt(max), pincode, delivery_filter: deliveryFilter })
     });
     const data = await res.json();
-
     if (data.error) { showError(data.error); resetBtn(); return; }
-
     currentJobId = data.job_id;
     show('progress-section');
     setStatusBadge('running');
     document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Scraping...';
-    pollInterval = setInterval(pollStatus, 1200);
-
+    pollInterval = setInterval(pollStatus, 3000);
   } catch (e) {
     showError('Could not connect to the scraper backend. Make sure the server is running.');
     resetBtn();
@@ -1077,43 +1255,83 @@ async function startScrape() {
 }
 
 let pollFailCount = 0;
+let livePollCount = 0;
 
 async function pollStatus() {
   if (!currentJobId) return;
   try {
     const res = await fetch(`/api/status/${currentJobId}`);
-    
-    // Handle 404 — server may have restarted (Render redeploy) wiping in-memory jobs
     if (!res.ok) {
       pollFailCount++;
       if (pollFailCount >= 8) {
         clearInterval(pollInterval);
         setStatusBadge('error');
-        showError('Lost connection to the scrape job. The server may have restarted during a deployment. Please try scraping again.');
-        hide('progress-section');
-        resetBtn();
+        showError('Lost connection to the scrape job. The server may have restarted. Please try again.');
+        hide('progress-section'); resetBtn();
       }
       return;
     }
-    
-    pollFailCount = 0;  // Reset on successful poll
+    pollFailCount = 0;
     const job = await res.json();
 
     const pct = job.progress || 0;
     document.getElementById('prog-bar').style.width = pct + '%';
     document.getElementById('prod-count').textContent = job.found || 0;
 
+    if (job.total_available) {
+      document.getElementById('prog-total-avail').style.display = 'block';
+      document.getElementById('prod-tot').textContent = job.total_available.toLocaleString();
+    }
+
+    // ETA badge
+    if (job.eta_seconds !== undefined && job.status === 'running') {
+      document.getElementById('eta-badge').style.display = 'inline-flex';
+      const m = Math.floor(job.eta_seconds / 60);
+      const s = job.eta_seconds % 60;
+      document.getElementById('eta-badge').textContent = `ETA: ${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    // Progress stats
+    if (job.elapsed_seconds !== undefined) {
+      const em = Math.floor(job.elapsed_seconds / 60);
+      const es = job.elapsed_seconds % 60;
+      document.getElementById('stat-elapsed').textContent = `${em}:${es.toString().padStart(2, '0')}`;
+    }
+    if (job.products_per_min !== undefined && job.products_per_min > 0) {
+      document.getElementById('stat-speed').textContent = job.products_per_min;
+    }
+    if (job.delivery_skipped !== undefined && job.delivery_skipped > 0) {
+      document.getElementById('stat-delivery-wrap').style.display = 'inline-flex';
+      document.getElementById('stat-delivery').textContent = job.delivery_skipped;
+    }
+
+    // Live stream table
+    livePollCount++;
+    if (job.status === 'running' && livePollCount % 2 === 0) {
+      fetchTableData().then(() => {
+        if (allProducts.length > 0) {
+          if (document.getElementById('data-section').style.display === 'none') {
+            showDataTable();
+          } else {
+            const q = document.getElementById('table-search').value.toLowerCase().trim();
+            filteredProducts = q ? allProducts.filter(p => Object.values(p).some(v => String(v).toLowerCase().includes(q))) : [...allProducts];
+            renderTable();
+          }
+        }
+      });
+    }
+
     if (job.log && job.log.length > logCache.length) {
       const newLines = job.log.slice(logCache.length);
       const logBox = document.getElementById('log-box');
       newLines.forEach(entry => {
-        const msg   = typeof entry === 'string' ? entry : entry.msg;
+        const msg = typeof entry === 'string' ? entry : entry.msg;
         const level = typeof entry === 'string' ? 'info' : (entry.level || 'info');
-        const div   = document.createElement('div');
+        const div = document.createElement('div');
         div.className = 'log-line' +
           (level === 'success' ? ' success' : '') +
-          (level === 'warn'    ? ' warn'    : '') +
-          (level === 'error'   ? ' error'   : '');
+          (level === 'warn' ? ' warn' : '') +
+          (level === 'error' ? ' error' : '');
         div.textContent = msg;
         logBox.appendChild(div);
       });
@@ -1125,16 +1343,11 @@ async function pollStatus() {
       clearInterval(pollInterval);
       setStatusBadge('done');
       document.getElementById('prog-bar').style.width = '100%';
-
       document.getElementById('res-total').textContent = job.total || job.found;
       document.getElementById('res-fields').textContent = '22';
       document.getElementById('res-pages').textContent = Math.ceil((job.total || job.found) / 20) || '—';
-
       setTimeout(() => {
-        show('result-section');
-        hide('progress-section');
-        resetBtn();
-        // Fetch data and automatically show table right below
+        show('result-section'); hide('progress-section'); resetBtn();
         fetchTableData().then(() => showDataTable());
       }, 600);
     }
@@ -1143,19 +1356,16 @@ async function pollStatus() {
       clearInterval(pollInterval);
       setStatusBadge('error');
       showError(job.error || 'An unknown error occurred.');
-      hide('progress-section');
-      resetBtn();
+      hide('progress-section'); resetBtn();
     }
 
-  } catch (e) { 
-    // Network blip — increment fail count but keep polling
+  } catch (e) {
     pollFailCount++;
     if (pollFailCount >= 8) {
       clearInterval(pollInterval);
       setStatusBadge('error');
       showError('Lost connection to the server. Please check your internet or try again.');
-      hide('progress-section');
-      resetBtn();
+      hide('progress-section'); resetBtn();
     }
   }
 }
@@ -1166,57 +1376,37 @@ async function fetchTableData() {
   try {
     const res = await fetch(`/api/data/${currentJobId}`);
     const data = await res.json();
-    if (data.products) {
-      allProducts = data.products;
-      filteredProducts = [...allProducts];
-    }
-  } catch (e) {
-    console.error('Failed to fetch table data:', e);
-  }
+    if (data.products) { allProducts = data.products; filteredProducts = [...allProducts]; }
+  } catch (e) { console.error('Failed to fetch table data:', e); }
 }
 
 function showDataTable() {
   if (!allProducts.length) return;
-  show('data-section');
-  tablePage = 1;
+  show('data-section'); tablePage = 1;
   filteredProducts = [...allProducts];
   document.getElementById('table-search').value = '';
   renderTable();
-  setTimeout(() => {
-    document.getElementById('data-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, 100);
+  setTimeout(() => { document.getElementById('data-section').scrollIntoView({ behavior:'smooth', block:'start' }); }, 100);
 }
 
-function hideDataTable() {
-  hide('data-section');
-}
+function hideDataTable() { hide('data-section'); }
 
 function filterTable() {
   const q = document.getElementById('table-search').value.toLowerCase().trim();
-  if (!q) {
-    filteredProducts = [...allProducts];
-  } else {
-    filteredProducts = allProducts.filter(p => {
-      return Object.values(p).some(v => String(v).toLowerCase().includes(q));
-    });
-  }
-  tablePage = 1;
-  renderTable();
+  filteredProducts = q ? allProducts.filter(p => Object.values(p).some(v => String(v).toLowerCase().includes(q))) : [...allProducts];
+  tablePage = 1; renderTable();
 }
 
 function renderTable() {
-  // Build header
   const headRow = document.getElementById('table-head-row');
   headRow.innerHTML = '<th>#</th>' + TABLE_COLUMNS.map(c => `<th>${c.label}</th>`).join('');
 
-  // Calculate pagination
   const total = filteredProducts.length;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   if (tablePage > totalPages) tablePage = totalPages;
   const start = (tablePage - 1) * PAGE_SIZE;
   const pageItems = filteredProducts.slice(start, start + PAGE_SIZE);
 
-  // Build body
   const tbody = document.getElementById('table-body');
   if (pageItems.length === 0) {
     tbody.innerHTML = `<tr><td colspan="${TABLE_COLUMNS.length + 1}" style="text-align:center; padding:40px; color:var(--text3);">No products found</td></tr>`;
@@ -1226,51 +1416,43 @@ function renderTable() {
       const cells = TABLE_COLUMNS.map(col => {
         const val = p[col.key] || '';
         if (col.type === 'image') {
-          if (val && val.startsWith('http')) {
-            return `<td class="cell-image"><img src="${escHtml(val)}" alt="" loading="lazy" onerror="this.style.display='none'"></td>`;
-          }
+          if (val && val.startsWith('http')) return `<td class="cell-image"><img src="${escHtml(val)}" alt="" loading="lazy" onerror="this.style.display='none'"></td>`;
           return `<td class="cell-image"><span style="color:var(--text4)">—</span></td>`;
+        }
+        if (col.type === 'images') {
+          const urls = [p['Additional Image 1'], p['Additional Image 2'], p['Additional Image 3'], p['Additional Image 4'], p['Additional Image 5']]
+            .filter(u => u && typeof u === 'string' && u.startsWith('http')).slice(0, 5);
+          if (urls.length > 0) {
+            const imgs = urls.map((u, idx) => `<img src="${escHtml(u)}" style="width:44px;height:44px;object-fit:cover;border-radius:8px;border:1.5px solid var(--border);margin-right:4px;cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;box-shadow:var(--shadow-sm);" onmouseover="this.style.transform='scale(2.4)';this.style.zIndex='99';this.style.boxShadow='0 8px 24px rgba(0,0,0,0.25)';" onmouseout="this.style.transform='scale(1)';this.style.zIndex='1';this.style.boxShadow='var(--shadow-sm)';" onclick="window.open('${escHtml(u)}','_blank')" title="Image ${idx+1}" loading="lazy" onerror="this.style.display='none'">`).join('');
+            return `<td style="min-width:240px;"><div style="display:flex;align-items:center;position:relative;">${imgs}</div></td>`;
+          }
+          return `<td><span style="color:var(--text4)">—</span></td>`;
         }
         if (col.type === 'name') {
           const productLink = p['Product URL'] || '#';
-          return `<td class="cell-name" title="Click to view full product page on Amazon"><a href="${escHtml(productLink)}" target="_blank" style="color:var(--text);text-decoration:none;font-weight:500;" onmouseover="this.style.textDecoration='underline';this.style.color='var(--primary)'" onmouseout="this.style.textDecoration='none';this.style.color='var(--text)'">${escHtml(truncate(val, 60))}</a></td>`;
+          return `<td class="cell-name" title="Click to view product"><a href="${escHtml(productLink)}" target="_blank" style="color:var(--text);text-decoration:none;font-weight:500;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">${escHtml(truncate(val, 60))}</a></td>`;
         }
-        if (col.type === 'price') {
-          return `<td class="cell-price">${escHtml(val) || '—'}</td>`;
-        }
-        if (col.type === 'brand') {
-          return `<td class="cell-brand">${escHtml(truncate(val, 30)) || '—'}</td>`;
-        }
+        if (col.type === 'price') return `<td class="cell-price">${escHtml(val) || '—'}</td>`;
+        if (col.type === 'brand') return `<td class="cell-brand">${escHtml(truncate(val, 30)) || '—'}</td>`;
         return `<td title="${escHtml(val)}">${escHtml(truncate(val, 40)) || '—'}</td>`;
       }).join('');
       return `<tr><td style="color:var(--text3); font-size:12px; font-family:'JetBrains Mono',monospace;">${rowNum}</td>${cells}</tr>`;
     }).join('');
   }
 
-  // Update footer
   document.getElementById('table-total').textContent = total;
-  document.getElementById('table-page-info').textContent = total
-    ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, total)} of ${total}`
-    : 'No records';
+  document.getElementById('table-page-info').textContent = total ? `Showing ${start + 1}–${Math.min(start + PAGE_SIZE, total)} of ${total}` : 'No records';
 
-  // Pagination buttons
   const pagDiv = document.getElementById('table-pagination');
   pagDiv.innerHTML = '';
-
-  // Prev
   const prevBtn = document.createElement('button');
-  prevBtn.className = 'page-btn';
-  prevBtn.innerHTML = '‹';
-  prevBtn.disabled = tablePage <= 1;
+  prevBtn.className = 'page-btn'; prevBtn.innerHTML = '‹'; prevBtn.disabled = tablePage <= 1;
   prevBtn.onclick = () => { tablePage--; renderTable(); scrollTableTop(); };
   pagDiv.appendChild(prevBtn);
-
-  // Page numbers
   const maxButtons = 5;
   let startPage = Math.max(1, tablePage - Math.floor(maxButtons / 2));
   let endPage = Math.min(totalPages, startPage + maxButtons - 1);
   if (endPage - startPage < maxButtons - 1) startPage = Math.max(1, endPage - maxButtons + 1);
-
   for (let i = startPage; i <= endPage; i++) {
     const btn = document.createElement('button');
     btn.className = 'page-btn' + (i === tablePage ? ' active' : '');
@@ -1278,50 +1460,27 @@ function renderTable() {
     btn.onclick = () => { tablePage = i; renderTable(); scrollTableTop(); };
     pagDiv.appendChild(btn);
   }
-
-  // Next
   const nextBtn = document.createElement('button');
-  nextBtn.className = 'page-btn';
-  nextBtn.innerHTML = '›';
-  nextBtn.disabled = tablePage >= totalPages;
+  nextBtn.className = 'page-btn'; nextBtn.innerHTML = '›'; nextBtn.disabled = tablePage >= totalPages;
   nextBtn.onclick = () => { tablePage++; renderTable(); scrollTableTop(); };
   pagDiv.appendChild(nextBtn);
 }
 
-function scrollTableTop() {
-  document.getElementById('table-scroll').scrollTop = 0;
-}
-
-function truncate(s, len) {
-  if (!s) return '';
-  return s.length > len ? s.substring(0, len) + '…' : s;
-}
-
-function escHtml(s) {
-  if (!s) return '';
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
+function scrollTableTop() { document.getElementById('table-scroll').scrollTop = 0; }
+function truncate(s, len) { return !s ? '' : s.length > len ? s.substring(0, len) + '…' : s; }
+function escHtml(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 function downloadFile() {
   if (!currentJobId) return;
   const btn = document.getElementById('download-btn');
-  if (btn) {
-    btn.innerHTML = '<div class="spinner" style="border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Downloading...';
-  }
+  if (btn) btn.innerHTML = '<div class="spinner" style="border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Downloading...';
   window.location.href = `/api/download/${currentJobId}`;
   setTimeout(() => {
-    if (btn) {
-      btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Excel';
-    }
+    if (btn) btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Excel';
   }, 2000);
 }
 
-function showError(msg) {
-  document.getElementById('error-msg').textContent = msg;
-  show('error-section');
-}
+function showError(msg) { document.getElementById('error-msg').textContent = msg; show('error-section'); }
 
 function setStatusBadge(state) {
   const b = document.getElementById('status-badge');
@@ -1331,14 +1490,9 @@ function setStatusBadge(state) {
 }
 
 function resetApp() {
-  currentJobId = null;
-  clearInterval(pollInterval);
-  hide('result-section');
-  hide('error-section');
-  hide('progress-section');
-  hide('data-section');
-  allProducts = [];
-  filteredProducts = [];
+  currentJobId = null; clearInterval(pollInterval); livePollCount = 0;
+  hide('result-section'); hide('error-section'); hide('progress-section'); hide('data-section');
+  allProducts = []; filteredProducts = [];
   document.getElementById('main-wrap').style.display = 'block';
   resetBtn();
 }
@@ -1354,15 +1508,14 @@ function flash(id, msg) {
   el.style.borderColor = 'var(--error)';
   el.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.1)';
   el.placeholder = msg;
-  setTimeout(() => {
-    el.style.borderColor = '';
-    el.style.boxShadow = '';
-    el.placeholder = el.id === 'url-input' ? 'https://www.amazon.in' : 'e.g. herbal face wash, protein powder...';
-  }, 2000);
+  setTimeout(() => { el.style.borderColor = ''; el.style.boxShadow = ''; }, 2000);
 }
 
 function show(id) { document.getElementById(id).style.display = 'block'; }
 function hide(id) { document.getElementById(id).style.display = 'none'; }
+
+// Init ETA on load
+updateETA();
 </script>
 </body>
 </html>

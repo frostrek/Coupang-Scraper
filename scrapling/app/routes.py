@@ -86,6 +86,8 @@ def start_scrape():
     url     = data.get('url','').strip()
     keyword = data.get('keyword','').strip()
     maxp    = max(1, min(int(data.get('max_products', 100)), 500))
+    pincode = data.get('pincode', '').strip()
+    delivery_filter = bool(data.get('delivery_filter', False))
 
     if not url:
         return jsonify({'error': 'URL is required'}), 400
@@ -108,6 +110,23 @@ def start_scrape():
     if not keyword:
         return jsonify({'error': 'Keyword contains no valid characters.'}), 400
 
+    # ── Pincode Validation ──
+    if delivery_filter:
+        if not pincode:
+            return jsonify({'error': 'Pincode is required when delivery filter is enabled.'}), 400
+        # Sanitize: digits only
+        pincode = re.sub(r'[^0-9]', '', pincode)
+        # Validate length based on domain
+        url_lower = url.lower()
+        if 'amazon.in' in url_lower or 'flipkart' in url_lower:
+            if len(pincode) != 6:
+                return jsonify({'error': 'Indian pincode must be exactly 6 digits.'}), 400
+        elif 'amazon.com' in url_lower and 'amazon.com.' not in url_lower:
+            if len(pincode) != 5:
+                return jsonify({'error': 'US ZIP code must be exactly 5 digits.'}), 400
+        elif len(pincode) < 4 or len(pincode) > 10:
+            return jsonify({'error': 'Pincode must be 4-10 digits.'}), 400
+
     # Check concurrency limits (Render free tier RAM is tightly restricted)
     active_jobs = sum(1 for j in jobs.values() if j.get('status') in ['running', 'queued'])
     if active_jobs >= 2:
@@ -115,11 +134,13 @@ def start_scrape():
 
     jid = str(uuid.uuid4())[:8]
     jobs[jid] = {'status':'queued','progress':0,'found':0,'log':[],
-                 'last_message':'Queued','url':url,'keyword':keyword}
+                 'last_message':'Queued','url':url,'keyword':keyword,
+                 'delivery_filter': delivery_filter, 'pincode': pincode}
     
     threading.Thread(
         target=scrape_job, 
-        args=(jid, jobs, url, keyword, maxp, OUTPUTS_DIR), 
+        args=(jid, jobs, url, keyword, maxp, OUTPUTS_DIR),
+        kwargs={'pincode': pincode, 'delivery_filter': delivery_filter},
         daemon=True
     ).start()
     
@@ -158,7 +179,7 @@ def get_data(jid):
     if not re.match(r'^[a-f0-9\-]{8}$', jid):
         return jsonify({'error': 'Invalid job ID'}), 400
     job = jobs.get(jid)
-    if not job or job.get('status') != 'done':
-        return jsonify({'error':'Not ready'}), 404
+    if not job:
+        return jsonify({'error': 'Not found'}), 404
     products = job.get('products', [])
     return jsonify({'products': products, 'total': len(products)})

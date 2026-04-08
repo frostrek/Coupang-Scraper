@@ -102,12 +102,11 @@ def build_excel(products, keyword, base_url, outputs_dir):
 
     # Write data rows
     for ri, prod in enumerate(products, 2):
-        fill = norm_fill
         ws.row_dimensions[ri].height = 20
         for ci, k in enumerate(all_keys, 1):
             val = prod.get(k, '')
             cell = ws.cell(row=ri, column=ci, value=val)
-            cell.fill = fill
+            cell.fill = norm_fill
             cell.border = cell_border
             cell.alignment = Alignment(vertical="center")
             # Style URL columns as links
