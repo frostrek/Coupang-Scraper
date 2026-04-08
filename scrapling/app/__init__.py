@@ -1,7 +1,16 @@
 from flask import Flask
 import os
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 app = Flask(__name__, static_folder='static', static_url_path='')
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "50 per hour"],
+    storage_uri="memory://"
+)
 
 # ── Output directory — works on Windows & Linux ───────────────────────────────
 # Go up one level from app/ directory to root

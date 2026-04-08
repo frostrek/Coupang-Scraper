@@ -22,6 +22,7 @@
     --primary-hover: #1E293B;
     --accent: #F97316;
     --accent-light: #FB923C;
+    --accent-hover: #EA580C;
     --accent-bg: rgba(249, 115, 22, 0.08);
     --accent-bg2: rgba(249, 115, 22, 0.12);
     --text: #0F172A;
@@ -43,6 +44,41 @@
     --radius: 16px;
     --radius-sm: 10px;
     --radius-xs: 8px;
+  }
+
+  [data-theme="dark"] {
+    --bg: #0B0F19;
+    --white: #111827;
+    --surface: #111827;
+    --surface2: #1E293B;
+    --surface3: #334155;
+    --border: #334155;
+    --border2: #475569;
+    --primary: #F8FAFC;
+    --primary-hover: #E2E8F0;
+    --text: #F8FAFC;
+    --text2: #CBD5E1;
+    --text3: #94A3B8;
+    --text4: #64748B;
+    --accent: #FB923C;
+    --accent-hover: #F97316;
+    --accent-bg: rgba(251, 146, 60, 0.15);
+    --success: #34D399;
+    --success-bg: rgba(52, 211, 153, 0.15);
+    --success-border: rgba(52, 211, 153, 0.25);
+    --error: #F87171;
+    --error-bg: rgba(248, 113, 113, 0.15);
+    --error-border: rgba(248, 113, 113, 0.25);
+    --warning: #FBBF24;
+    --warning-bg: rgba(251, 191, 36, 0.15);
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.2);
+    --shadow-md: 0 10px 25px -5px rgba(0,0,0,0.3);
+    --shadow-lg: 0 20px 25px -5px rgba(0,0,0,0.4);
+  }
+
+  /* ─── THEME TRANSITION ─── */
+  body, .card, input, .stat-box, .log-wrap, .btn-outline {
+    transition: background-color 0.3s, color 0.3s, border-color 0.3s;
   }
 
   html { scroll-behavior: smooth; }
@@ -115,6 +151,21 @@
     align-items: center;
     gap: 8px;
   }
+  .theme-toggle-btn {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text2);
+    border-radius: 50%;
+    width: 38px;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .theme-toggle-btn:hover { background: var(--border); color: var(--text); }
+  .theme-toggle-btn svg { width: 18px; height: 18px; }
 
   /* ─── PILLS ─── */
   .pills {
@@ -374,11 +425,34 @@
     border: 1px solid var(--border);
     padding: 10px 20px;
   }
-  .btn-outline:hover {
+  .btn-outline:hover:not(:disabled) {
     background: var(--surface2);
     border-color: var(--border2);
     color: var(--text);
   }
+  .btn-outline:disabled { opacity: 0.55; cursor: not-allowed; }
+  
+  .btn-danger-outline {
+    background: transparent;
+    color: var(--error);
+    border: 1px solid var(--error-border);
+    padding: 10px 20px;
+  }
+  .btn-danger-outline:hover:not(:disabled) {
+    background: var(--error-bg);
+  }
+  .btn-danger-outline:disabled { opacity: 0.55; cursor: not-allowed; }
+
+  .btn-success-outline {
+    background: transparent;
+    color: var(--success);
+    border: 1px solid var(--success-border);
+    padding: 10px 20px;
+  }
+  .btn-success-outline:hover:not(:disabled) {
+    background: var(--success-bg);
+  }
+  .btn-success-outline:disabled { opacity: 0.55; cursor: not-allowed; }
 
   /* ─── PROGRESS CARD ─── */
   #progress-section { display: none; }
@@ -445,6 +519,40 @@
   .log-line.success { color: var(--success); }
   .log-line.warn { color: var(--warning); }
   .log-line.error { color: var(--error); }
+
+  /* ─── TOAST NOTIFICATIONS ─── */
+  #toast-container {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .toast {
+    background: var(--surface);
+    color: var(--text);
+    padding: 14px 20px;
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transform: translateX(120%);
+    opacity: 0;
+    transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.3s;
+  }
+  .toast.show {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  .toast.success { border-left: 4px solid var(--success); }
+  .toast.error { border-left: 4px solid var(--error); }
+  .toast.info { border-left: 4px solid var(--accent); }
 
   /* ─── STATUS BADGE ─── */
   .status-badge {
@@ -891,6 +999,11 @@
       <h1>DataHarvest</h1>
       <p>E-commerce product scraper & exporter</p>
     </div>
+    <div class="header-right">
+      <button class="theme-toggle-btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+      </button>
+    </div>
   </header>
 
   <div class="pills">
@@ -916,7 +1029,7 @@
 
       <div class="field full">
         <label>Search Keyword</label>
-        <input type="text" id="keyword-input" placeholder="e.g. herbal face wash, protein powder..." />
+        <input type="text" id="keyword-input" placeholder="e.g. herbal face wash, protein powder..." onkeypress="handleEnter(event)" />
         <div class="keyword-chips">
           <div class="kw-chip" onclick="setKeyword('herbal')">herbal</div>
           <div class="kw-chip" onclick="setKeyword('organic skincare')">organic skincare</div>
@@ -981,15 +1094,15 @@
     <div class="progress-header">
       <div>
         <div class="progress-site" id="prog-site">—</div>
-        <div style="margin-top:6px">
+        <div style="margin-top:6px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
           <span class="status-badge running" id="status-badge">
-            <span class="dot pulse"></span> Running
+            <span class="dot pulse"></span> <span id="status-text">Running</span>
           </span>
-          <span id="eta-badge" style="display:none; font-size:12px; font-weight:500; font-family:'JetBrains Mono',monospace; margin-left:8px; padding:3px 8px; border-radius:100px; background:var(--surface2); color:var(--text2); border:1px solid var(--border);">ETA: --:--</span>
+          <span id="eta-badge" style="display:none; font-size:12px; font-weight:500; font-family:'JetBrains Mono',monospace; padding:3px 8px; border-radius:100px; background:var(--surface2); color:var(--text2); border:1px solid var(--border);">ETA: --:--</span>
         </div>
       </div>
       <div style="text-align:right">
-        <div class="progress-count"><span id="prod-count">0</span><small>products</small></div>
+        <div class="progress-count"><span id="prod-count" style="transition: color 0.3s;">0</span><small>products</small></div>
         <div id="prog-total-avail" style="font-size:12px; color:var(--text3); font-weight:500; margin-top:4px; display:none;">~<span id="prod-tot">0</span> available total</div>
       </div>
     </div>
@@ -999,10 +1112,26 @@
     </div>
 
     <div class="progress-stats" id="progress-stats">
-      <div class="pstat">⏱ Elapsed: <span class="pstat-val" id="stat-elapsed">0:00</span></div>
-      <div class="pstat">⚡ Speed: <span class="pstat-val" id="stat-speed">—</span>/min</div>
-      <div class="pstat" id="stat-delivery-wrap" style="display:none;">🚚 Filtered: <span class="pstat-val" id="stat-delivery">0</span></div>
+      <div class="pstat" title="Total Elapsed Time">⏱ <span class="pstat-val" id="stat-elapsed">0:00</span></div>
+      <div class="pstat" title="Estimated Speed">⚡ <span class="pstat-val" id="stat-speed">—</span>/min</div>
+      <div class="pstat" title="Successfully Enriched" style="color:var(--success);">✅ <span class="pstat-val" id="stat-success">0</span></div>
+      <div class="pstat" title="Failed Enrichment" style="color:var(--error);">❌ <span class="pstat-val" id="stat-fail">0</span></div>
+      <div class="pstat" id="stat-compliance-wrap" title="Compliance Keyword Fixes" style="display:none; color:var(--warning);">🛡️ Fixes: <span class="pstat-val" id="stat-compliance">0</span></div>
+      <div class="pstat" id="stat-delivery-wrap" title="Delivery Not Supported" style="display:none; color:var(--accent);">🚚 Skipped: <span class="pstat-val" id="stat-delivery">0</span></div>
     </div>
+
+    <div style="display:flex; gap:10px; margin-top:16px;">
+      <button class="btn btn-danger-outline" id="cancel-btn" onclick="cancelJob()" style="flex:1; padding:8px 12px; font-size:12px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        Stop Scrape
+      </button>
+      <button class="btn btn-success-outline" id="export-partial-btn" onclick="downloadPartial()" style="flex:1; padding:8px 12px; font-size:12px; display:none;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export Collected
+      </button>
+    </div>
+
+    <hr style="margin: 16px 0;">
 
     <div class="log-wrap" id="log-box">
       <div class="log-line" style="color:var(--text4)">Waiting for logs...</div>
@@ -1049,7 +1178,16 @@
       <strong>Scrape Failed</strong>
       <span id="error-msg"></span>
     </div>
-    <div style="text-align:center;">
+    <div class="info-box" style="margin-top:12px; background:var(--surface);">
+      <b>Quick Fixes:</b>
+      <ul style="margin-top:6px; margin-left:22px; color:var(--text3); font-size:13px; line-height:1.6;">
+        <li>Check if the website URL is correct.</li>
+        <li>Ensure your search keyword exists on the site.</li>
+        <li>If blocked by CAPTCHA, try again in a few minutes.</li>
+        <li>If rate-limited, wait 1 minute.</li>
+      </ul>
+    </div>
+    <div style="text-align:center; margin-top: 16px;">
       <button class="footer-link" onclick="resetApp()">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
         Try Again
@@ -1104,6 +1242,9 @@
   Powered by <span style="font-weight:600; color:#F97316;">Frostrek</span>
 </div>
 
+<!-- Toast Container -->
+<div id="toast-container"></div>
+
 <script>
 let currentJobId = null;
 let pollInterval = null;
@@ -1112,6 +1253,50 @@ let allProducts = [];
 let filteredProducts = [];
 let tablePage = 1;
 const PAGE_SIZE = 25;
+let displayedCount = 0; // Animated counter state
+
+// ─── THEME TOGGLE ───
+function toggleTheme() {
+  const currentTheme = document.documentElement.getAttribute('data-theme');
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', newTheme);
+  localStorage.setItem('theme', newTheme);
+}
+if (localStorage.getItem('theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+
+// ─── TOAST NOTIFICATIONS ───
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  let icon = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
+  toast.innerHTML = `<span>${icon}</span> <span>${message}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => toast.classList.add('show'), 10);
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+// ─── KEYBOARD SHORTCUT ───
+function handleEnter(e) {
+  if (e.key === 'Enter') startScrape();
+}
+
+function updateCounterUI(targetCount) {
+  const diff = targetCount - displayedCount;
+  if (diff > 0) {
+    displayedCount += Math.ceil(diff / 3); 
+    const counterEl = document.getElementById('prod-count');
+    counterEl.innerText = displayedCount;
+    counterEl.style.color = 'var(--accent)';
+    setTimeout(() => { counterEl.style.color = 'var(--text)'; }, 200);
+  } else if (targetCount === 0) {
+    displayedCount = 0;
+    document.getElementById('prod-count').innerText = '0';
+  }
+}
 
 const TABLE_COLUMNS = [
   { key: 'Main Image', label: 'Image', type: 'image' },
@@ -1219,21 +1404,31 @@ async function startScrape() {
 
   document.getElementById('scrape-btn').disabled = true;
   document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Starting...';
+  // Disable inputs during scrape
+  document.querySelectorAll('#setup-section input, #setup-section button, #setup-section select').forEach(el => el.disabled = true);
+  document.querySelectorAll('.kw-chip').forEach(el => el.style.pointerEvents = 'none');
 
   hide('result-section'); hide('error-section'); hide('data-section');
   logCache = []; allProducts = []; filteredProducts = [];
   document.getElementById('log-box').innerHTML = '';
   document.getElementById('prod-count').textContent = '0';
+  displayedCount = 0;
   document.getElementById('prog-bar').style.width = '0%';
   document.getElementById('prog-site').textContent = url;
   document.getElementById('stat-elapsed').textContent = '0:00';
   document.getElementById('stat-speed').textContent = '—';
+  document.getElementById('stat-success').textContent = '0';
+  document.getElementById('stat-fail').textContent = '0';
+  document.getElementById('cancel-btn').disabled = false;
+  document.getElementById('export-partial-btn').style.display = 'none';
+
   if (deliveryFilter) {
     document.getElementById('stat-delivery-wrap').style.display = 'inline-flex';
     document.getElementById('stat-delivery').textContent = '0';
   } else {
     document.getElementById('stat-delivery-wrap').style.display = 'none';
   }
+  document.getElementById('stat-compliance-wrap').style.display = 'none';
 
   try {
     const res = await fetch('/api/scrape', {
@@ -1276,7 +1471,7 @@ async function pollStatus() {
 
     const pct = job.progress || 0;
     document.getElementById('prog-bar').style.width = pct + '%';
-    document.getElementById('prod-count').textContent = job.found || 0;
+    updateCounterUI(job.found || job.products?.length || 0);
 
     if (job.total_available) {
       document.getElementById('prog-total-avail').style.display = 'block';
@@ -1289,6 +1484,17 @@ async function pollStatus() {
       const m = Math.floor(job.eta_seconds / 60);
       const s = job.eta_seconds % 60;
       document.getElementById('eta-badge').textContent = `ETA: ${m}:${s.toString().padStart(2, '0')}`;
+    } else {
+      document.getElementById('eta-badge').style.display = 'none';
+    }
+
+    // Cancel/Partial Extport logic
+    const isRunning = (job.status === 'running' || job.status === 'queued');
+    document.getElementById('cancel-btn').disabled = !isRunning;
+    if (isRunning && (job.products?.length > 0)) {
+        document.getElementById('export-partial-btn').style.display = 'inline-flex';
+    } else {
+        document.getElementById('export-partial-btn').style.display = 'none';
     }
 
     // Progress stats
@@ -1297,8 +1503,13 @@ async function pollStatus() {
       const es = job.elapsed_seconds % 60;
       document.getElementById('stat-elapsed').textContent = `${em}:${es.toString().padStart(2, '0')}`;
     }
-    if (job.products_per_min !== undefined && job.products_per_min > 0) {
-      document.getElementById('stat-speed').textContent = job.products_per_min;
+    if (job.products_per_min !== undefined && job.products_per_min > 0) document.getElementById('stat-speed').textContent = job.products_per_min;
+    if (job.success_count) document.getElementById('stat-success').textContent = job.success_count;
+    if (job.fail_count) document.getElementById('stat-fail').textContent = job.fail_count;
+    
+    if (job.compliance_fixed !== undefined && job.compliance_fixed > 0) {
+      document.getElementById('stat-compliance-wrap').style.display = 'inline-flex';
+      document.getElementById('stat-compliance').textContent = job.compliance_fixed;
     }
     if (job.delivery_skipped !== undefined && job.delivery_skipped > 0) {
       document.getElementById('stat-delivery-wrap').style.display = 'inline-flex';
@@ -1344,8 +1555,12 @@ async function pollStatus() {
       setStatusBadge('done');
       document.getElementById('prog-bar').style.width = '100%';
       document.getElementById('res-total').textContent = job.total || job.found;
-      document.getElementById('res-fields').textContent = '22';
-      document.getElementById('res-pages').textContent = Math.ceil((job.total || job.found) / 20) || '—';
+      document.getElementById('res-fields').textContent = Object.keys(allProducts[0] || {}).length || 22;
+      document.getElementById('res-pages').textContent = Math.ceil((job.total || job.found) / (allProducts.length ? PAGE_SIZE : 20)) || '—';
+      document.getElementById('cancel-btn').style.display = 'none';
+      
+      showToast(`Scrape complete! Successfully captured ${job.total || job.found || 0} products.`, 'success');
+
       setTimeout(() => {
         show('result-section'); hide('progress-section'); resetBtn();
         fetchTableData().then(() => showDataTable());
@@ -1475,9 +1690,42 @@ function downloadFile() {
   const btn = document.getElementById('download-btn');
   if (btn) btn.innerHTML = '<div class="spinner" style="border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Downloading...';
   window.location.href = `/api/download/${currentJobId}`;
+  showToast('Download started', 'success');
   setTimeout(() => {
     if (btn) btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Excel';
   }, 2000);
+}
+
+function downloadPartial() {
+  if (!currentJobId) return;
+  const btn = document.getElementById('export-partial-btn');
+  btn.disabled = true;
+  window.location.href = `/api/download-partial/${currentJobId}`;
+  showToast('Partial export downloaded successfully', 'success');
+  setTimeout(() => { btn.disabled = false; }, 2000);
+}
+
+function cancelJob() {
+  if (!currentJobId || !confirm("Are you sure you want to stop the scrape? The items collected so far will be saved.")) return;
+  
+  const btn = document.getElementById('cancel-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="border-width:2px;width:12px;height:12px;margin-right:6px"></span> Stopping...';
+  
+  fetch('/api/cancel/' + currentJobId, { method: 'POST' })
+    .then(r => r.json())
+    .then(res => {
+      if(res.error) {
+        showToast(res.error, 'error');
+        btn.disabled = false;
+        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> Stop Scrape';
+      } else {
+        showToast("Cancellation sent. Saving current products...", "info");
+      }
+    }).catch(e => {
+       showToast("Failed to cancel: " + e, 'error');
+       btn.disabled = false;
+    });
 }
 
 function showError(msg) { document.getElementById('error-msg').textContent = msg; show('error-section'); }
@@ -1501,6 +1749,16 @@ function resetBtn() {
   const btn = document.getElementById('scrape-btn');
   btn.disabled = false;
   btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> Start Scraping';
+  
+  // Re-enable inputs
+  document.querySelectorAll('#setup-section input, #setup-section button, #setup-section select').forEach(el => el.disabled = false);
+  document.querySelectorAll('.kw-chip').forEach(el => el.style.pointerEvents = 'auto');
+  
+  // Reset cancel UI
+  document.getElementById('cancel-btn').style.display = 'inline-flex';
+  document.getElementById('cancel-btn').innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> Stop Scrape';
+  
+  document.getElementById('keyword-input').focus();
 }
 
 function flash(id, msg) {

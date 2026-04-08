@@ -12,9 +12,8 @@ def extract_price(t):
     # Strip HTML entities and extra whitespace
     t = t.replace('\xa0', ' ').strip()
     
-    # If there's a per-unit string like "(₹999 / 100g)", only evaluate the part BEFORE the slash
-    if '/' in t:
-        t = t.split('/')[0]
+    # Strip per-unit pricing patterns like "(₹999 / 100g)" but NOT arbitrary slashes (URLs etc.)
+    t = re.sub(r'[₹$€£¥]?\s*[\d,]+\.?\d*\s*/\s*\d*\s*(?:gm?|gram|grams|kg|ml|l|oz|lb|unit|piece|count|tablet|capsule|sachet|strip|pack)\b', '', t, flags=re.I)
     
     # Find a price pattern: optional currency symbol, then digits with optional commas and decimal
     m = re.search(r'([₹$€£¥])\s*([\d,]+\.?\d*)', t)

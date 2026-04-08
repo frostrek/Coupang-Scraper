@@ -62,6 +62,7 @@ Populate it with:
 GEMINI_API_KEY="your_api_key_here"
 DATABASE_URL="postgresql://..." # Or leave empty if not used
 MAX_CONCURRENT_SCRAPES=2
+# Note: Rate-limiting limits are automatically enforced via Flask-Limiter (in-memory)
 ```
 
 ## 5. Setup Gunicorn as a systemd Service

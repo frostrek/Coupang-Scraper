@@ -1,15 +1,14 @@
-# High-Performance Amazon & E-commerce Scraper
+# High-Performance Coupang Scraper
 
 A production-grade, highly concurrent e-commerce scraping system designed to extract, normalize, and enrich product data using **Scrapling**, **Patchright**, and **Google Gemini AI**. 
 
-Specifically hardened for Amazon (India/US) to achieve 100% data accuracy through PDP-level authority and AI-driven data sanitization.
+Specifically hardened for Coupang (Korea) to achieve 100% compliance sanitization and data accuracy through PDP-level authority and AI-driven data processing.
 
 ## 🌟 Key Features
 - **PDP-First Authority**: PDP (Product Detail Page) data strictly overrides search-level data to eliminate "phantom" prices or generic thumbnails.
 - **AI-Powered Normalization**: Utilizes Gemini 2.0 Flash to standardize weights/volumes, enforce description word counts, and classify categories.
 - **Anti-Blocking Stealth**: Uses `Scrapling` and `curl_cffi` to bypass TLS fingerprinting and bypass CAPTCHAs via advanced header rotation.
-- **Metric Exclusivity**: Forces a strict choice between Weight (g/kg) and Volume (ml/L) to prevent contradictory Excel data.
-- **Image Intelligence**: Automatically bypasses Amazon's lazy-load transparent GIF placeholders to capture high-resolution product imagery.
+- **Image Intelligence**: Automatically bypasses lazy-load transparent GIF placeholders to capture high-resolution product imagery.
 
 ## 📦 Prerequisites
 - **Python 3.10+**
@@ -66,7 +65,7 @@ python run.py
 ```
 
 - Access the Dashboard at `http://127.0.0.1:5055`
-- Paste an Amazon Search URL (e.g., `https://www.amazon.in/s?k=protein+powder`)
+- Paste a Coupang Search URL (e.g., `https://www.coupang.com/np/search?q=protein+powder`)
 - Set the limit and click **Scrape**.
 - Downloads will appear in the `outputs/` folder.
 

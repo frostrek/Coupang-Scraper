@@ -4,6 +4,7 @@ import os
 import re
 import random
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urljoin
 
@@ -129,6 +130,49 @@ def get_selectors_for_url(url):
     if 'amazon' in url.lower():
         return PLATFORM_SELECTORS['amazon'] + GENERIC_SELECTORS
     return GENERIC_SELECTORS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SHARED IMAGE ANCESTRY VALIDATOR (single source of truth — was duplicated twice)
+# ─────────────────────────────────────────────────────────────────────────────
+_BLOCKED_ANCESTOR_IDS = [
+    'review', 'customer-review', 'cr-widget', 'cr-media',
+    'ask-btf', 'aplus', 'day0-widget',
+    'HLCXComparisonWidget', 'similarFeatures',
+    'percolate', 'recommendations', 'rhf',
+    'sp_detail', 'sp_detail2', 'ape_Detail',
+    'sims-fbt', 'purchase-sims', 'session-sims',
+    'dp-ads-center',
+]
+_BLOCKED_ANCESTOR_CLASSES = [
+    'review', 'customer-review', 'cr-widget', 'cr-media',
+    'carousel', 'sims-fbt', 'similar', 'recommendation',
+    'also-bought', 'also-viewed', 'comparison', 'aplus',
+    'a-carousel', 'sponsored', 'ad-feedback',
+    'day0-widget', 'similarities', 'p13n',
+    'rhf-border', 'rhf-results', 'percolate',
+    'sp_detail', 'ape_Detail',
+]
+
+def _is_product_gallery_ancestor_safe(img_el) -> bool:
+    """Returns False if the image element lives inside a review, recommendation,
+    comparison, carousel, or any non-product-gallery section.
+    
+    This is the SINGLE source of truth — previously this logic was copy-pasted
+    in two places inside fetch_product_details()."""
+    for parent in img_el.parents:
+        if not parent.name:
+            continue
+        parent_id = (parent.get('id') or '').lower()
+        parent_class = ' '.join(parent.get('class', [])).lower()
+        for blocked in _BLOCKED_ANCESTOR_IDS:
+            if blocked.lower() in parent_id:
+                return False
+        for blocked in _BLOCKED_ANCESTOR_CLASSES:
+            if blocked.lower() in parent_class:
+                return False
+    return True
+
 
 def extract_products_from_soup(soup, base_url):
     """Extract product containers from page HTML."""
@@ -268,6 +312,10 @@ def extract_single_product(c, base_url):
                 name = trunc.strip()
         # ── COUPANG COMPLIANCE: Sanitize product name at SERP level (early gate) ──
         name, _serp_changes = compliance_sanitize_text(name)
+        # Second pass with user exact mappings already included in sanitize_text,
+        # but run again to catch any residue after regex cleanup stripped spaces.
+        name = name.strip()
+        name, _serp_changes2 = compliance_sanitize_text(name)
         p['Product Name'] = name
         
         # ── Quantity Discovery: "Pack of 3", "Set of 2" ──
@@ -399,13 +447,33 @@ def fetch_product_details(url, existing_p, fetcher=None):
     p = existing_p.copy()
 
     # ─────────────────────────────────────────────────────────────────────
-    # OUT OF STOCK / UNAVAILABLE CHECK
+    # OUT OF STOCK / UNAVAILABLE / NON-DELIVERABLE CHECK
     # ─────────────────────────────────────────────────────────────────────
-    availability_el = soup.select_one('#availability, #outOfStock, .a-color-price')
+    # 1. Text-based availability checks
+    availability_el = soup.select_one('#availability, #outOfStock, .a-color-price, #exports_desktop_undeliverable_buybox, #buyBoxAccordion, #merchant-info, #deliveryBlockMessage')
     if availability_el:
         avail_text = availability_el.get_text().lower()
-        if any(term in avail_text for term in ['currently unavailable', 'out of stock', "don't know when or if this item will be back"]):
-            return None  # Product is dead, abort scraping
+        unavailability_markers = [
+            'currently unavailable', 
+            'out of stock', 
+            "don't know when or if this item will be back",
+            'no featured offers available',
+            'cannot be delivered',
+            'not deliverable',
+            'undeliverable',
+            'currently not available',
+            'item is not available'
+        ]
+        if any(term in avail_text for term in unavailability_markers):
+            return None  # Product is dead or unavailable, abort scraping
+    
+    # 2. Page-level broad check for "No featured offers available" widget
+    buybox_text = soup.select_one('#buybox, #desktop_buybox, #rightCol')
+    if buybox_text:
+        bb_text = buybox_text.get_text().lower()
+        if 'no featured offers available' in bb_text or 'see all buying options' in bb_text:
+             if 'add to cart' not in bb_text and 'buy now' not in bb_text:
+                 return None # No direct buy box available
 
 
     # ─────────────────────────────────────────────────────────────────────
@@ -418,41 +486,8 @@ def fetch_product_details(url, existing_p, fetcher=None):
     if _asin_url_match:
         _current_asin = _asin_url_match.group(1)
 
-    def _is_own_product_image(img_el):
-        """Returns False if the image element lives inside a review, recommendation,
-        comparison, carousel, or any non-product-gallery section."""
-        BLOCKED_ANCESTORS_IDS = [
-            'review', 'customer-review', 'cr-widget', 'cr-media',
-            'ask-btf', 'aplus', 'day0-widget',
-            'HLCXComparisonWidget', 'similarFeatures',
-            'percolate', 'recommendations', 'rhf',
-            'sp_detail', 'sp_detail2', 'ape_Detail',
-            'sims-fbt', 'purchase-sims', 'session-sims',
-            'dp-ads-center',
-        ]
-        BLOCKED_ANCESTORS_CLASSES = [
-            'review', 'customer-review', 'cr-widget', 'cr-media',
-            'carousel', 'sims-fbt', 'similar', 'recommendation',
-            'also-bought', 'also-viewed', 'comparison', 'aplus',
-            'a-carousel', 'sponsored', 'ad-feedback',
-            'day0-widget', 'similarities', 'p13n',
-            'rhf-border', 'rhf-results', 'percolate',
-            'sp_detail', 'ape_Detail',
-        ]
-        for parent in img_el.parents:
-            if not parent.name:
-                continue
-            parent_id = (parent.get('id') or '').lower()
-            parent_class = ' '.join(parent.get('class', [])).lower()
-            # Check IDs
-            for blocked in BLOCKED_ANCESTORS_IDS:
-                if blocked.lower() in parent_id:
-                    return False
-            # Check classes
-            for blocked in BLOCKED_ANCESTORS_CLASSES:
-                if blocked.lower() in parent_class:
-                    return False
-        return True
+    # Use the shared function for ancestor checking
+    _is_own_product_image = _is_product_gallery_ancestor_safe
 
     pdp_main_img = None
     # STRICT selectors — only hero/landing image elements, NOT the broad #imageBlock
@@ -593,16 +628,18 @@ def fetch_product_details(url, existing_p, fetcher=None):
         p['Discount Base Price'] = pdp_disc
     # else: both empty — no price on PDP (rare, product may be unavailable)
 
-    # 1. Extract Detailed Description (Prioritize "About this item" / feature bullets)
     about_item = soup.select_one('#feature-bullets')
     if about_item:
-        p['Detailed Description'] = clean_text(about_item.get_text())[:2000]
+        raw_desc = clean_text(about_item.get_text())[:2000]
     else:
         desc_el = soup.select_one(
             '#productDescription, [class*="description"], [class*="Description"]'
         )
-        if desc_el:
-            p['Detailed Description'] = clean_text(desc_el.get_text())[:2000]
+        raw_desc = clean_text(desc_el.get_text())[:2000] if desc_el else ''
+
+    if raw_desc:
+        sanitized_desc, _desc_changes = compliance_sanitize_text(raw_desc)
+        p['Detailed Description'] = sanitized_desc
 
     # 2. Extract Technical Specs / Item Details (Brand, Manufacturer, ASIN)
     spec_data = {}
@@ -777,42 +814,8 @@ def fetch_product_details(url, existing_p, fetcher=None):
                 return False
         return True
 
-    def _is_product_gallery_image(img_el) -> bool:
-        """Returns False if the image element lives inside a review, recommendation,
-        comparison, or carousel section — i.e. it belongs to a DIFFERENT product."""
-        # Walk up the DOM tree and check for contamination containers
-        BLOCKED_ANCESTOR_IDS = [
-            'review', 'customer-review', 'cr-widget', 'cr-media',
-            'ask-btf', 'aplus', 'day0-widget',
-            'HLCXComparisonWidget', 'similarFeatures',
-            'percolate', 'recommendations', 'rhf',
-            'sp_detail', 'sp_detail2', 'ape_Detail',
-            'sims-fbt', 'purchase-sims', 'session-sims',
-            'dp-ads-center',
-        ]
-        BLOCKED_ANCESTOR_CLASSES = [
-            'review', 'customer-review', 'cr-widget', 'cr-media',
-            'carousel', 'sims-fbt', 'similar', 'recommendation',
-            'also-bought', 'also-viewed', 'comparison', 'aplus',
-            'a-carousel', 'sponsored', 'ad-feedback',
-            'day0-widget', 'similarities', 'p13n',
-            'rhf-border', 'rhf-results', 'percolate',
-            'sp_detail', 'ape_Detail',
-        ]
-        for parent in img_el.parents:
-            if not parent.name:
-                continue
-            parent_id = (parent.get('id') or '').lower()
-            parent_class = ' '.join(parent.get('class', [])).lower()
-            # Check IDs
-            for blocked in BLOCKED_ANCESTOR_IDS:
-                if blocked.lower() in parent_id:
-                    return False
-            # Check Classes
-            for blocked in BLOCKED_ANCESTOR_CLASSES:
-                if blocked.lower() in parent_class:
-                    return False
-        return True
+    # Use the shared function — no more duplicate code
+    _is_product_gallery_image = _is_product_gallery_ancestor_safe
     
     # Strategy A: Extract from Amazon's inline JSON image dictionary (most reliable, hi-res guaranteed)
     # HARDENED: Try multiple JSON patterns — Amazon uses different formats across regions
@@ -1129,7 +1132,10 @@ def fetch_product_details(url, existing_p, fetcher=None):
         for w in words:
             if w not in unique_words and len(w) > 2:
                 unique_words.append(w)
-        p['Search Keywords'] = ', '.join(unique_words[:25])
+        raw_keywords = ', '.join(unique_words[:25])
+        # ── COUPANG COMPLIANCE: Sanitize keywords at PDP extraction time ──
+        sanitized_keywords, _kw_changes = compliance_sanitize_text(raw_keywords)
+        p['Search Keywords'] = sanitized_keywords
 
     # Final safety: ensure Main Image is preserved if PDP/additional extraction found nothing
     if not p.get('Main Image') and serp_main_image:
@@ -1320,8 +1326,20 @@ def _process_single_product(prod, job_fetcher, log_fn, pincode='', delivery_filt
         # Gemini LLM Sanitization and Precision Extractor — MANDATORY for every product
         log_fn(f"✨ Perfecting with Gemini: {pname[:30]}...")
         prod = sanitize_product_data(prod)
+
+        # ── POST-GEMINI COMPLIANCE RE-PASS ──────────────────────────────────
+        # Gemini rewrites Product Name, Description, and Keywords from scratch.
+        # This re-pass guarantees no banned word survives in Gemini-generated text.
+        prod, _post_changes = compliance_sanitize_product(prod)
+        if _post_changes:
+            log_fn(f"🛡️ Post-Gemini fix ({', '.join(_post_changes.keys())}): {pname[:30]}...")
     except Exception as llm_err:
         log_fn(f"⚠️ LLM processing failed for {pname[:30]}: {llm_err}. Using scraped data.", 'warn')
+        # Gemini failed — still sanitize whatever scraped data we have
+        try:
+            prod, _ = compliance_sanitize_product(prod)
+        except Exception:
+            pass
 
     return prod
 
@@ -1336,6 +1354,11 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
     job['compliance_fixed'] = 0  # Track compliance keyword replacements
     job['elapsed_seconds'] = 0
     job['products_per_min'] = 0
+    job['success_count'] = 0     # Products successfully enriched
+    job['fail_count'] = 0        # Products that failed enrichment
+    
+    # Thread-safe lock for product list mutations
+    _products_lock = threading.Lock()
 
     def log(msg, level='info'):
         job['log'].append({'msg': msg, 'level': level})
@@ -1361,6 +1384,11 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
         job_fetcher = StealthyFetcher()
 
         while len(all_products) < max_products:
+            # ── CANCELLATION CHECK ──
+            if job.get('cancelled'):
+                log("🛑 Scrape cancelled by user.", 'warn')
+                break
+
             if current_sort_idx >= len(sort_strategies):
                 log("ℹ️ Exhausted all deep-search sorting strategies. Stopping.", 'warn')
                 break
@@ -1383,20 +1411,40 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
 
             soup = BeautifulSoup(html, 'lxml')
             
-            # --- Extract Total Available Products ---
+            # --- Extract Total Available Products (SCOPED to result bar only) ---
             if page == 1:
-                # Look for strings like "1-48 of over 20,000 results"
                 try:
-                    res_text = soup.get_text()
-                    match = re.search(r'of\s+(?:over\s+)?([\d,]+)\s+results', res_text, re.IGNORECASE)
-                    if not match:
-                        match = re.search(r'([\d,]+)\s+results', res_text, re.IGNORECASE)
+                    # STRICT: Only look in Amazon's result info bar, NOT the entire page
+                    result_bar_selectors = [
+                        'span[data-component-type="s-result-info-bar"]',
+                        '.s-desktop-toolbar .a-spacing-small',
+                        '#s-result-count',
+                        '.a-section.a-spacing-small.a-spacing-top-small',
+                        '#search .sg-col-inner .a-section',
+                    ]
+                    result_bar_text = ''
+                    for rbs in result_bar_selectors:
+                        rbar = soup.select_one(rbs)
+                        if rbar:
+                            result_bar_text = rbar.get_text(separator=' ')
+                            break
                     
-                    if match:
-                        total_str = match.group(1).replace(',', '')
-                        if total_str.isdigit():
-                            job['total_available'] = int(total_str)
-                            log(f"📈 Found ~{job['total_available']} total available products for keyword")
+                    if result_bar_text:
+                        # Match "1-48 of over 20,000 results" or "1-48 of 500 results"
+                        match = re.search(r'of\s+(?:over\s+)?([\d,]+)\s+results', result_bar_text, re.IGNORECASE)
+                        if not match:
+                            match = re.search(r'([\d,]+)\s+results', result_bar_text, re.IGNORECASE)
+                        
+                        if match:
+                            total_str = match.group(1).replace(',', '')
+                            if total_str.isdigit():
+                                total_val = int(total_str)
+                                # Sanity check: reject clearly bogus values
+                                if 1 <= total_val <= 1_000_000:
+                                    job['total_available'] = total_val
+                                    log(f"📈 Amazon reports ~{total_val:,} products for this keyword")
+                                else:
+                                    log(f"⚠️ Ignoring suspicious total: {total_val}", 'warn')
                 except Exception:
                     pass
 
@@ -1500,16 +1548,21 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                                 compliance_notes = enriched.pop('_compliance_changes', None)
                                 if compliance_notes:
                                     job['compliance_fixed'] = job.get('compliance_fixed', 0) + 1
-                                all_products.append(enriched)
                                 
-                                # Stream data & Update ETA
+                                # Thread-safe product list mutation
+                                with _products_lock:
+                                    all_products.append(enriched)
+                                    product_count = len(all_products)
+                                
+                                # Update job state (atomic assignments are thread-safe in CPython)
                                 job['products'] = list(all_products)
                                 elapsed = time.time() - start_time
-                                avg_time = elapsed / len(all_products)
-                                rem = max_products - len(all_products)
+                                avg_time = elapsed / product_count
+                                rem = max_products - product_count
                                 job['eta_seconds'] = int(max(0, avg_time * rem))
                                 job['elapsed_seconds'] = int(elapsed)
-                                job['products_per_min'] = round(len(all_products) / (elapsed / 60), 1) if elapsed > 0 else 0
+                                job['products_per_min'] = round(product_count / (elapsed / 60), 1) if elapsed > 0 else 0
+                                job['success_count'] = job.get('success_count', 0) + 1
                                 
                                 # Insert fully sanitized product into Postgres Warehouse
                                 try:
@@ -1522,6 +1575,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                                     
                                 added += 1
                         except Exception as fut_err:
+                            job['fail_count'] = job.get('fail_count', 0) + 1
                             log(f"⚠️ Product processing failed: {fut_err}", 'warn')
 
             delivery_skip_msg = f", 🚚{delivery_skipped_page} delivery-filtered" if delivery_filter and delivery_skipped_page > 0 else ''
@@ -1539,13 +1593,53 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
             page += 1
             time.sleep(random.uniform(0.8, 1.5))
 
+        # Handle cancellation — save whatever we got
+        was_cancelled = job.get('cancelled', False)
+        
         if not all_products:
+            if was_cancelled:
+                job['status'] = 'done'
+                job['progress'] = 100
+                job['total'] = 0
+                job['products'] = []
+                log("🛑 Scrape cancelled. No products were collected.", 'warn')
+                return
             job['status'] = 'error'; job['error'] = "No products were scraped."; return
+
+        # ── ABSOLUTE FINAL GATE — word-level hard scan ──────────────────────────
+        from .coupang_compliance import _MASTER_REPLACEMENTS, _USER_REPLACEMENTS
+        
+        def _hard_scan_field(text: str) -> str:
+            """Run every single compiled pattern one more time. No mercy."""
+            if not text:
+                return text
+            result = str(text)
+            for pattern, replacement in _USER_REPLACEMENTS + _MASTER_REPLACEMENTS:
+                if replacement == '[REMOVED]':
+                    result = pattern.sub('', result)
+                else:
+                    result = pattern.sub(replacement, result)
+            # Clean up artifacts
+            result = re.sub(r'  +', ' ', result).strip()
+            return result
+
+        log(f"🛡️ Final compliance scan on {len(all_products)} products before export...")
+        FIELDS_TO_SCAN = ['Product Name', 'Detailed Description', 'Search Keywords', 'Brand']
+        clean_products = []
+        for _prod in all_products:
+            for _field in FIELDS_TO_SCAN:
+                if _prod.get(_field):
+                    _prod[_field] = _hard_scan_field(_prod[_field])
+            clean_products.append(_prod)
+        all_products = clean_products
 
         log(f"📊 Building Excel for {len(all_products)} products …")
         job['progress'] = 90
-        fp = build_excel(all_products, keyword, base_url, outputs_dir)
-        log(f"✅ Excel saved → {os.path.basename(fp)}", 'success')
+        fp = build_excel(all_products, keyword, base_url, outputs_dir, partial=was_cancelled)
+        if was_cancelled:
+            log(f"🛑 Cancelled — saved {len(all_products)} products → {os.path.basename(fp)}", 'warn')
+        else:
+            log(f"✅ Excel saved → {os.path.basename(fp)}", 'success')
 
         job.update({'status':'done','progress':100,'filepath':fp,'total':len(all_products),'products':all_products})
 

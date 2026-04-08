@@ -214,13 +214,26 @@ or prompts.
 
 ---
 
-## SECTION 1 — TITLE SANITIZATION
+## SECTION 1 — PRODUCT NAME FORMAT (STRICT)
 
-Apply ALL of the following rules to the "Product Name":
+The Product Name MUST follow this exact structure:
+[Brand] [Product Line] [Product Type] [Variant/Shade/Color if any] [Quantity with unit]
+
+EXAMPLES:
+- "Maybelline New York Fit Me Matte Liquid Foundation Shade 137 Golden Tan 30 ml"
+- "Samsung Galaxy Buds FE Wireless Earbuds Graphite"
+- "Himalaya Herbals Neem Face Wash 150 ml"
+- "Dove Intense Repair Shampoo 340 ml"
+- "Logitech G502 Hero Gaming Mouse Black"
+
+RULES:
 1. BANNED SUPERLATIVES: Remove "Best", "No.1", "#1", "Top", "Greatest", "World's Best", "Unbeatable". 
 2. BANNED COMPETITOR NAMES: Remove Amazon, Flipkart, eBay, Walmart, Naver, Coupang, Aliexpress.
-3. TITLE LENGTH: Must be strictly under 100 characters.
-4. CRITICAL: The Product Name must NOT contain any unit-price references like "₹XX/100gm" or "Rs.XX per 100ml".
+3. TITLE LENGTH: Strict maximum of 100 characters.
+4. INCLUDE QUANTITY: If weight/volume is known (e.g. 30 ml, 200 gm, 9 g), append it at the END of the Product Name.
+5. INCLUDE SHADE/VARIANT: If a shade number, color name, or variant exists, include it.
+6. NO unit-price references like "₹XX/100gm" or "Rs.XX per 100ml".
+7. Keep it clean, professional, and SEO-friendly. No filler words.
 
 ---
 
@@ -233,50 +246,133 @@ Apply ALL of the following rules to the "Product Name":
 
 ## SECTION 3 — DESCRIPTION, KEYWORDS & QUANTITY
 
-1. DETAILED DESCRIPTION: Generate a RICH, STRUCTURED, marketing-grade product description using this EXACT format:
+Rule - Do not use any banned, restricted, avoidable, unnecessary words in the description according to south korea coupang platform policy. 
 
-EXAMPLE FORMAT (follow this structure exactly):
+1. DETAILED DESCRIPTION: Generate a product description that is STRUCTURED, NEUTRAL, and COMPLIANCE-SAFE.
 
-[EXACT Product Name]
+🚨 ABSOLUTELY PROHIBITED WORDS — NEVER use these in Product Name, Description, or Keywords:
 
-[Paragraph 1: What the product is and its primary value proposition. Include the full product name naturally in the first sentence.]
+MEDICAL / HEAL / CURE CLAIMS (ZERO TOLERANCE):
+- "heal", "heals", "healing", "healed"
+- "cure", "cures", "curing", "cured"
+- "treat", "treats", "treating", "treatment"
+- "prevent", "prevents", "preventing", "prevention"
+- "diagnose", "diagnosis", "diagnostic"
+- "remedy", "remedies"
+- "therapy", "therapeutic"
+- "repair", "repairs", "repairing" (for body/skin/hair context)
+- "restore", "restores", "restoring", "restoration"
+- "recover", "recovery" (for body/skin/hair context)
+- "relieve", "relief" (for body/skin/hair context)
 
-[Paragraph 2: Key ingredients, technology, or materials. What makes it special. Include any testing or certifications mentioned.]
+UNVERIFIED AUTHORITY / CERTIFICATION CLAIMS:
+- "clinically proven", "clinically tested", "clinically effective"
+- "dermatologist recommended", "doctor recommended"
+- "FDA approved", "FDA cleared", "FDA registered"
+- "medically proven", "scientifically proven"
+- "certified organic", "government approved"
+- "guaranteed results", "proven results"
 
-[Paragraph 3 (optional): Additional benefits, suitability, or usage context.]
+EXAGGERATED / ABSOLUTE CLAIMS:
+- "100%", "0%", "guaranteed", "perfect", "flawless"
+- "miracle", "magical", "instant results", "overnight results"
+- "best", "No.1", "#1", "top", "ultimate", "unbeatable"
+- "anti-aging", "anti-wrinkle", "whitening", "slimming"
+- "fat loss", "weight loss", "fat burning"
 
-Key Features
+BODY TRANSFORMATION CLAIMS:
+- "removes wrinkles", "removes scars", "removes dark spots"
+- "anti-hair fall", "hair loss control", "strengthens roots"
+- "skin whitening", "skin lightening", "bleaching"
+- "complete repair", "deep repair"
 
+USE THESE SAFE ALTERNATIVES INSTEAD:
+- heal/cure/treat → "supports", "helps care for", "designed for"
+- repair/restore → "helps maintain", "improves appearance"
+- anti-aging → "daily care", "age-defying"
+- whitening → "brightening", "fresh look"
+- clinically proven → "quality tested"
+- 100% effective → "designed for"
+- guaranteed → (remove entirely)
+- best/No.1 → "popular", "premium"
+
+### MANDATORY DESCRIPTION TEMPLATE (follow this EXACT structure — every line matters):
+
+```
+[EXACT Product Name]                              ← Line 1: MUST be identical to the "Product Name" field
+                                                   ← Line 2: EMPTY
+[Tag 1] | [Tag 2] | [Tag 3]                       ← Line 3: 3 pipe-separated category/feature tags
+                                                   ← Line 4: EMPTY
+[Paragraph 1: What the product is. Mention the full product name naturally. Use safe phrasing like "is designed for everyday use" or "suitable for regular use".]
+                                                   ← EMPTY LINE
+[Paragraph 2: Key materials, texture, or standard functionality. Keep it factual and neutral. No medical claims, no superlatives, no absolute guarantees.]
+                                                   ← EMPTY LINE
+[Short closing line about the size/quantity, e.g. "The 30 ml bottle is convenient for personal use and travel."]
+                                                   ← EMPTY LINE
+Key Features                                       ← EXACT heading, no colon
+                                                   ← EMPTY LINE
 - [Feature 1 - most important selling point]
 - [Feature 2]
 - [Feature 3]
 - [Feature 4]
-- [Feature 5 (optional)]
-- [Feature 6 (optional)]
-
-[Category-Adaptive Section Title]
-
+- [Feature 5]
+                                                   ← EMPTY LINE
+[Category-Adaptive Section Title]                  ← See category list below
+                                                   ← EMPTY LINE
 - [Detail 1]
 - [Detail 2]
 - [Detail 3]
-- [Detail 4 (optional)]
+- [Detail 4]
+```
 
-RULES FOR DESCRIPTION:
-- Line 1 MUST be exactly the Product Name by itself.
+### REAL EXAMPLE (this is the GOLD STANDARD — match this quality and structure exactly):
+
+```
+Maybelline New York Fit Me Powder Foundation Shade 128 9 g
+
+Powder Foundation | Matte Finish | Everyday Makeup
+
+Maybelline New York Fit Me Powder Foundation is designed for everyday makeup routines. The powder formula applies easily on the skin and helps create an even-looking makeup base. Suitable for regular use.
+
+The foundation has a soft and fine texture that spreads evenly during application. It can be applied using a sponge or brush for a smooth and comfortable finish. The compact size makes it easy to carry for touch-ups during the day.
+
+The 9 g compact is convenient for personal use and travel.
+
+Key Features
+
+- Powder foundation for daily makeup
+- Smooth and easy application
+- Fine texture for even coverage
+- Suitable for routine use
+- Shade 128 9 g compact
+
+Texture & Finish
+
+- Soft powder texture
+- Easy to apply and blend
+- Smooth and even finish
+- Comfortable feel on skin
+```
+
+### DESCRIPTION RULES:
+- Line 1 MUST be EXACTLY the Product Name (identical to the "Product Name" JSON field).
 - Line 2 MUST be empty.
-- Line 3 starts Paragraph 1. DO NOT include any other headers.
-- Generate 2-3 marketing paragraphs in professional English. NO emojis, NO symbols.
-- "Key Features" section with 4-6 bullet points starting with "- ".
-- A CATEGORY-ADAPTIVE final section. Choose the heading based on product type:
-  * Skincare/Beauty: "Texture and Finish"
-  * Electronics/Gadgets: "Build and Design"  
-  * Food/Beverages: "Taste and Packaging"
-  * Clothing/Fashion: "Fabric and Fit"
-  * Home/Kitchen: "Material and Build"
-  * General/Other: "Usage and Application"
-- Each bullet in the final section starts with "- ".
+- Line 3 MUST be 3 pipe-separated tags (e.g. "Wireless Earbuds | Noise Cancellation | Bluetooth 5.0").
+- Line 4 MUST be empty.
+- Paragraphs: 2 neutral marketing paragraphs in professional English. NO emojis, NO symbols, NO headers before paragraphs.
+- Closing line: A short sentence about the product size/quantity for convenience.
+- "Key Features" section: 4-5 bullet points starting with "- ". Simple, factual, no banned words.
+- Category-Adaptive final section title. Choose based on product type:
+  * Skincare/Beauty: "Texture & Finish"
+  * Electronics/Gadgets: "Build & Design"  
+  * Food/Beverages: "Taste & Packaging"
+  * Clothing/Fashion: "Fabric & Fit"
+  * Home/Kitchen: "Material & Build"
+  * General/Other: "Usage & Application"
+- Final section: 3-4 bullet points starting with "- ".
 - Keep the ENTIRE description under 2000 characters.
-- Write as if you are a premium brand copywriter. The tone should feel polished and professional.
+- Tone: Professional, neutral, factual. Like a premium product listing writer. No excitement, no claims.
+- CRITICAL: The description must read like a real Coupang product page — clean, structured, informative.
 
 2. SEARCH KEYWORDS: EXACTLY 20 keywords.
 3. QUANTITY EXTRACTION: Look for "Pack of X", "Set of X", "Count", "Pieces". Extraction ONLY as an integer.
@@ -319,8 +415,8 @@ Do NOT use any of these banned terms anywhere in your output:
 {get_banned_keywords_for_prompt()}
 
 IMPORTANT: If the product name or description contains ANY of these banned terms,
-you MUST replace them with the provided safe alternative. This is a legal compliance
-requirement — failure to replace these terms will result in seller account suspension.
+you MUST replace them with the provided safe alternative or REMOVE them entirely as instructed. 
+This is a strict requirement — not even a single banned word must be present in your output!
 
 ---
 
@@ -424,17 +520,38 @@ Even if the input description and specs are empty, write a professional descript
             # 2. Strip ALL symbols from Detailed Description
             if sanitized.get("Detailed Description"):
                 sanitized["Detailed Description"] = _strip_symbols(sanitized["Detailed Description"])
-            # 3. Enforce description first line is EXACTLY the product name
+            # 3. Enforce description template: Line1=ProductName, Line2=empty, Line3=Tags, Line4=empty, ...
             if sanitized.get("Detailed Description") and sanitized.get("Product Name"):
                 pname = sanitized["Product Name"]
                 desc = sanitized["Detailed Description"].strip()
+                lines = desc.split('\n')
                 
-                if not desc.startswith(pname):
-                    # If it doesn't already start with the product name, prepend it
+                # Find the pipe-separated tags line (e.g. "Powder Foundation | Matte Finish | Everyday Makeup")
+                tags_line = None
+                content_start_idx = 0
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    if '|' in stripped and len(stripped) < 200:
+                        tags_line = stripped
+                        content_start_idx = i + 1
+                        break
+                
+                # Collect the remaining content (everything after the tags line)
+                remaining_lines = []
+                for i in range(content_start_idx, len(lines)):
+                    # Skip lines that are just the product name repeated
+                    if lines[i].strip() == pname:
+                        continue
+                    remaining_lines.append(lines[i])
+                remaining_content = '\n'.join(remaining_lines).strip()
+                
+                # Rebuild the description in the exact template format
+                if tags_line:
+                    sanitized["Detailed Description"] = f"{pname}\n\n{tags_line}\n\n{remaining_content}"
+                elif not desc.startswith(pname):
                     sanitized["Detailed Description"] = f"{pname}\n\n{desc}"
                 else:
-                    # Make sure there is an empty line between product name and the rest
-                    lines = desc.split('\n')
+                    # Already starts with product name, just ensure empty line after it
                     if len(lines) > 1 and lines[1].strip() != '':
                         sanitized["Detailed Description"] = f"{pname}\n\n" + '\n'.join(lines[1:]).strip()
             
