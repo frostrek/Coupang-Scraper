@@ -21,7 +21,7 @@ from . import db
 # ─────────────────────────────────────────────────────────────────────────────
 # CONCURRENCY CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
-MAX_CONCURRENT_PRODUCTS = 15  # Process 15 products in parallel (speed boost)
+MAX_CONCURRENT_PRODUCTS = 5  # Reduced from 15 to 5 due to limits on EC2 t3a.medium (4GB memory) and API rate limits (HTTP & Gemini)
 
 # Initialize header generator for extreme stealth
 header_gen = HeaderGenerator()
@@ -1469,10 +1469,8 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                     log(f"⚠️ {msg}", 'warn')
                     job['status'] = 'error'; job['error'] = msg; return
                 else:
-                    log("ℹ️ No more products for this sorting strategy. Switching search parameters...", 'warn')
-                    current_sort_idx += 1
-                    page = 1
-                    continue
+                    log(f"ℹ️ Reached end of available products. Only {len(all_products)} found in total. Stopping search.", 'warn')
+                    break
 
             # ── Filter duplicates BEFORE expensive PDP/LLM processing ──
             candidates = []
@@ -1563,16 +1561,8 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                                 job['elapsed_seconds'] = int(elapsed)
                                 job['products_per_min'] = round(product_count / (elapsed / 60), 1) if elapsed > 0 else 0
                                 job['success_count'] = job.get('success_count', 0) + 1
+                                # [MODIFIED] Bulk DB save logic was moved to the very end.
                                 
-                                # Insert fully sanitized product into Postgres Warehouse
-                                try:
-                                    sku = enriched.get('SKU')
-                                    if sku:
-                                        db.save_product_to_db(enriched)
-                                except Exception as db_err:
-                                    pname = enriched.get('Product Name', '')[:30]
-                                    log(f"⚠️ DB save failed for {pname}: {db_err}", 'warn')
-                                    
                                 added += 1
                         except Exception as fut_err:
                             job['fail_count'] = job.get('fail_count', 0) + 1
@@ -1586,10 +1576,8 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
             # Stop ONLY if the page was truly empty (no products found at all)
             # Do NOT stop if products were found but all were duplicates — move to next page!
             if added == 0 and skipped == 0 and (not delivery_filter or delivery_skipped_page == 0):
-                log("ℹ️ Empty parsing results. Switching search strategy...", 'warn')
-                current_sort_idx += 1
-                page = 1
-                continue
+                log(f"ℹ️ Reached end of available products. Only {len(all_products)} found in total. Stopping search.", 'warn')
+                break
             page += 1
             time.sleep(random.uniform(0.8, 1.5))
 
@@ -1632,6 +1620,10 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                     _prod[_field] = _hard_scan_field(_prod[_field])
             clean_products.append(_prod)
         all_products = clean_products
+        
+        # ── BULK DB SAVE AT VERY END ──────────────────────────
+        log(f"💽 Saving {len(all_products)} products to Database...")
+        db.save_products_bulk(all_products)
 
         log(f"📊 Building Excel for {len(all_products)} products …")
         job['progress'] = 90
@@ -1648,6 +1640,19 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
         job['status'] = 'error'; job['error'] = str(e)
         log(f"💥 {e}", 'error')
         print(traceback.format_exc())
+        
+        # ── EMERGENCY RESCUE BLOCK ──
+        # If a fatal error happens, secure the products collected so far.
+        if 'all_products' in locals() and all_products:
+            log(f"⚠️ Interrupted! Attempting to rescue {len(all_products)} collected products...", 'warn')
+            try:
+                # Do a bulk save of the surviving products
+                db.save_products_bulk(all_products)
+                fp = build_excel(all_products, keyword, base_url, outputs_dir, partial=True)
+                job.update({'filepath': fp, 'total': len(all_products), 'products': all_products})
+                log(f"✅ Emergency save successful: {os.path.basename(fp)} saved.", 'success')
+            except Exception as rescue_err:
+                log(f"❌ Emergency save failed: {rescue_err}", 'error')
     finally:
         # Prevent Memory Leaks! Explicitly close browser
         if 'job_fetcher' in locals() and job_fetcher:

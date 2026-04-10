@@ -1,8 +1,8 @@
-# High-Performance Coupang Scraper
+# High-Performance E-commerce Scraper
 
 A production-grade, highly concurrent e-commerce scraping system designed to extract, normalize, and enrich product data using **Scrapling**, **Patchright**, and **Google Gemini AI**. 
 
-Specifically hardened for Coupang (Korea) to achieve 100% compliance sanitization and data accuracy through PDP-level authority and AI-driven data processing.
+Specifically hardened for both Amazon and Coupang to achieve 100% compliance sanitization and data accuracy through extremely robust PDP-level authority and AI-driven data processing.
 
 ## 🌟 Key Features
 - **PDP-First Authority**: PDP (Product Detail Page) data strictly overrides search-level data to eliminate "phantom" prices or generic thumbnails.
@@ -53,7 +53,7 @@ GEMINI_API_KEY="your_api_key_here"
 # Database Configuration (Optional - set to empty string to skip)
 DATABASE_URL="postgresql://postgres:[password]@db.supabase.com:5432/postgres"
 
-# Concurrency Control (Default: 2-5 for free tier hosting)
+# ncy Control (Default: 2-5 for free tier hosting)
 MAX_CONCURRENT_SCRAPES=2
 ```
 
@@ -65,7 +65,7 @@ python run.py
 ```
 
 - Access the Dashboard at `http://127.0.0.1:5055`
-- Paste a Coupang Search URL (e.g., `https://www.coupang.com/np/search?q=protein+powder`)
+- Paste a Search URL (e.g., `https://www.amazon.in/s?k=cream` or target site structure)
 - Set the limit and click **Scrape**.
 - Downloads will appear in the `outputs/` folder.
 

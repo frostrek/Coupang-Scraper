@@ -1285,16 +1285,12 @@ function handleEnter(e) {
 }
 
 function updateCounterUI(targetCount) {
-  const diff = targetCount - displayedCount;
-  if (diff > 0) {
-    displayedCount += Math.ceil(diff / 3); 
+  if (displayedCount !== targetCount) {
+    displayedCount = targetCount;
     const counterEl = document.getElementById('prod-count');
     counterEl.innerText = displayedCount;
     counterEl.style.color = 'var(--accent)';
     setTimeout(() => { counterEl.style.color = 'var(--text)'; }, 200);
-  } else if (targetCount === 0) {
-    displayedCount = 0;
-    document.getElementById('prod-count').innerText = '0';
   }
 }
 
@@ -1439,6 +1435,7 @@ async function startScrape() {
     const data = await res.json();
     if (data.error) { showError(data.error); resetBtn(); return; }
     currentJobId = data.job_id;
+    localStorage.setItem('scrapling_currentJobId', currentJobId);
     show('progress-section');
     setStatusBadge('running');
     document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Scraping...';
@@ -1473,10 +1470,7 @@ async function pollStatus() {
     document.getElementById('prog-bar').style.width = pct + '%';
     updateCounterUI(job.found || job.products?.length || 0);
 
-    if (job.total_available) {
-      document.getElementById('prog-total-avail').style.display = 'block';
-      document.getElementById('prod-tot').textContent = job.total_available.toLocaleString();
-    }
+    // Strict absolute counter tracking, no Amazon-level estimates.
 
     // ETA badge
     if (job.eta_seconds !== undefined && job.status === 'running') {
@@ -1738,6 +1732,7 @@ function setStatusBadge(state) {
 }
 
 function resetApp() {
+  localStorage.removeItem('scrapling_currentJobId');
   currentJobId = null; clearInterval(pollInterval); livePollCount = 0;
   hide('result-section'); hide('error-section'); hide('progress-section'); hide('data-section');
   allProducts = []; filteredProducts = [];
@@ -1774,6 +1769,20 @@ function hide(id) { document.getElementById(id).style.display = 'none'; }
 
 // Init ETA on load
 updateETA();
+
+// Resume Job on Refresh
+document.addEventListener("DOMContentLoaded", () => {
+    const savedJobId = localStorage.getItem('scrapling_currentJobId');
+    if (savedJobId) {
+        currentJobId = savedJobId;
+        show('progress-section');
+        document.getElementById('scrape-btn').disabled = true;
+        document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Resuming...';
+        document.querySelectorAll('#setup-section input, #setup-section button, #setup-section select').forEach(el => el.disabled = true);
+        pollInterval = setInterval(pollStatus, 3000);
+        pollStatus(); // fetch immediately
+    }
+});
 </script>
 </body>
 </html>

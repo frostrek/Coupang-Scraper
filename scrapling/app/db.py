@@ -147,3 +147,54 @@ def save_product_to_db(prod: dict):
         print(f"[Supabase DB] ❌ Error inserting SKU '{sku}': {e}")
         _local.conn = None
         return False
+
+def save_products_bulk(products: list):
+    """Inserts multiple fully formatted scraped products into the Supabase Data Warehouse at once."""
+    conn = get_db_connection()
+    if not conn or not products:
+        print("[Supabase DB] Skipping bulk DB insert — no connection or no products.")
+        return False
+        
+    inserted_count = 0
+    try:
+        with conn.cursor() as cur:
+            sql = """
+                INSERT INTO products (
+                    sku, product_name, category, brand, manufacturer,
+                    sale_price, discount_base_price, stock, volume, weight,
+                    main_image, product_url, search_keywords, detailed_description
+                ) VALUES (
+                    %(sku)s, %(name)s, %(category)s, %(brand)s, %(manufacturer)s,
+                    %(sale)s, %(mrp)s, %(stock)s, %(volume)s, %(weight)s,
+                    %(img)s, %(url)s, %(keywords)s, %(desc)s
+                ) ON CONFLICT (sku) DO NOTHING
+            """
+            
+            for prod in products:
+                sku = prod.get("SKU")
+                if not sku:
+                    continue
+                payload = {
+                    "sku": sku,
+                    "name": prod.get("Product Name"),
+                    "category": prod.get("Category"),
+                    "brand": prod.get("Brand"),
+                    "manufacturer": prod.get("Manufacturer"),
+                    "sale": prod.get("Sale Price"),
+                    "mrp": prod.get("Discount Base Price"),
+                    "stock": prod.get("Stock", 2),
+                    "volume": prod.get("Volume"),
+                    "weight": prod.get("Weight"),
+                    "img": prod.get("Main Image"),
+                    "url": prod.get("Product URL"),
+                    "keywords": prod.get("Search Keywords"),
+                    "desc": prod.get("Detailed Description"),
+                }
+                cur.execute(sql, payload)
+                inserted_count += 1
+            print(f"[Supabase DB] ✅ Stored {inserted_count} products in bulk.")
+        return True
+    except Exception as e:
+        print(f"[Supabase DB] ❌ Error in bulk insert: {e}")
+        _local.conn = None
+        return False
