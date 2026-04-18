@@ -37,9 +37,12 @@ Specifically hardened for both Amazon and Coupang to achieve 100% compliance san
    pip install -r requirements.txt
    ```
 
-4. **Install Browsers (CRITICAL)**:
+4. **Install Browsers & OS Dependencies (CRITICAL)**:
    ```bash
    playwright install chromium
+   
+   # If deploying on Linux (like AWS EC2), you must also install OS libraries:
+   sudo npx playwright install-deps
    ```
 
 ## ⚙️ Configuration
@@ -70,9 +73,8 @@ python run.py
 - Downloads will appear in the `outputs/` folder.
 
 ## ☁️ Deployment
-For detailed instructions on deploying to AWS or Render, see:
+For detailed instructions on deploying to AWS EC2, see:
 - [AWS EC2 Deployment Guide](AWS_EC2_DEPLOYMENT.md)
-- [Render Deployment Guide](RENDER_DEPLOYMENT.md)
 
 ## 📊 Data Mapping Rules
 - **Sale Price**: The current price the customer pays.

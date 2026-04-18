@@ -10,6 +10,7 @@ from flask import request, jsonify, send_file
 from . import app, jobs, OUTPUTS_DIR, limiter
 from .scraper import scrape_job
 from .excel_utils import build_excel
+from . import db
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECURITY: Domain Allowlist (SSRF Prevention)
@@ -113,6 +114,7 @@ def start_scrape():
     maxp    = _safe_int(data.get('max_products', 100), default=100, min_val=1, max_val=500)
     pincode = data.get('pincode', '').strip()
     delivery_filter = bool(data.get('delivery_filter', False))
+    search_mode = data.get('search_mode', 'category')
 
     if not url:
         return jsonify({'error': 'URL is required'}), 400
@@ -162,6 +164,7 @@ def start_scrape():
         'status': 'queued', 'progress': 0, 'found': 0, 'log': [],
         'last_message': 'Queued', 'url': url, 'keyword': keyword,
         'delivery_filter': delivery_filter, 'pincode': pincode,
+        'search_mode': search_mode,
         'cancelled': False,  # Cancellation flag
         'products': [],      # Live product list
         'max_products': maxp,
@@ -170,7 +173,7 @@ def start_scrape():
     threading.Thread(
         target=scrape_job, 
         args=(jid, jobs, url, keyword, maxp, OUTPUTS_DIR),
-        kwargs={'pincode': pincode, 'delivery_filter': delivery_filter},
+        kwargs={'pincode': pincode, 'delivery_filter': delivery_filter, 'search_mode': search_mode},
         daemon=True
     ).start()
     
@@ -192,7 +195,10 @@ def download(jid):
     if not re.match(r'^[a-f0-9\-]{8}$', jid):
         return jsonify({'error': 'Invalid job ID'}), 400
     job = jobs.get(jid)
-    if not job or job.get('status') != 'done':
+    if not job:
+        return jsonify({'error':'Not found'}), 404
+    # Allow download for completed jobs AND crashed jobs with rescued data
+    if job.get('status') not in ('done', 'error') or not job.get('filepath'):
         return jsonify({'error':'Not ready'}), 404
     fp = job.get('filepath','')
     # Security: Ensure filepath is within the outputs directory (path traversal prevention)
@@ -233,6 +239,42 @@ def download_partial(jid):
         return send_file(fp, as_attachment=True, download_name=os.path.basename(fp))
     except Exception as e:
         return jsonify({'error': f'Export failed: {str(e)}'}), 500
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SAVE TO DB — Only triggered when user clicks Download (on-demand)
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/save-to-db/<jid>', methods=['POST'])
+def save_to_db(jid):
+    if not re.match(r'^[a-f0-9\-]{8}$', jid):
+        return jsonify({'error': 'Invalid job ID'}), 400
+    job = jobs.get(jid)
+    if not job:
+        return jsonify({'error': 'Not found'}), 404
+    
+    products = job.get('products', [])
+    if not products:
+        return jsonify({'error': 'No products to save'}), 404
+    
+    # Products are now saved incrementally during scraping.
+    # This endpoint serves as a catch-up safety net on download click.
+    already_saved = job.get('db_saved_count', 0)
+    if job.get('_db_saved'):
+        return jsonify({'success': True, 'message': f'Already saved to DB ({already_saved} products)', 'count': already_saved})
+    
+    try:
+        # Bulk insert with ON CONFLICT DO NOTHING — catches any products
+        # that slipped through the incremental saves (e.g. due to transient DB errors)
+        result = db.save_products_bulk(products)
+        if result:
+            job['_db_saved'] = True
+            return jsonify({'success': True, 'message': f'Verified {len(products)} products in database ({already_saved} saved during scrape)', 'count': len(products)})
+        else:
+            # DB connection might not be configured — that's OK, still allow download
+            return jsonify({'success': True, 'message': 'DB not configured — download proceeding without DB save', 'count': 0})
+    except Exception as e:
+        # Don't block the download if DB save fails
+        return jsonify({'success': True, 'message': f'DB save failed ({str(e)}) — download proceeding', 'count': 0})
 
 
 # ─────────────────────────────────────────────────────────────────────────────

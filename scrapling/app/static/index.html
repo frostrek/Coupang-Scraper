@@ -1000,6 +1000,9 @@
       <p>E-commerce product scraper & exporter</p>
     </div>
     <div class="header-right">
+      <button class="theme-toggle-btn" id="clear-data-btn" onclick="clearAllData()" title="Clear Cached Data" style="background:var(--error-bg);border-color:var(--error-border);color:var(--error);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </button>
       <button class="theme-toggle-btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
       </button>
@@ -1028,7 +1031,15 @@
       </div>
 
       <div class="field full">
-        <label>Search Keyword</label>
+        <label>Search Mode</label>
+        <select id="search-mode-select" style="width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg2); color: var(--text);" onchange="updateSearchLabel()">
+          <option value="category">Category / Generic Keyword (Scrapes all brands)</option>
+          <option value="brand">Strict Brand Target (Only scrapes products matching the keyword EXACTLY)</option>
+        </select>
+      </div>
+
+      <div class="field full">
+        <label id="keyword-label">Search Keyword</label>
         <input type="text" id="keyword-input" placeholder="e.g. herbal face wash, protein powder..." onkeypress="handleEnter(event)" />
         <div class="keyword-chips">
           <div class="kw-chip" onclick="setKeyword('herbal')">herbal</div>
@@ -1118,6 +1129,8 @@
       <div class="pstat" title="Failed Enrichment" style="color:var(--error);">❌ <span class="pstat-val" id="stat-fail">0</span></div>
       <div class="pstat" id="stat-compliance-wrap" title="Compliance Keyword Fixes" style="display:none; color:var(--warning);">🛡️ Fixes: <span class="pstat-val" id="stat-compliance">0</span></div>
       <div class="pstat" id="stat-delivery-wrap" title="Delivery Not Supported" style="display:none; color:var(--accent);">🚚 Skipped: <span class="pstat-val" id="stat-delivery">0</span></div>
+      <div class="pstat" id="stat-db-wrap" title="Saved to Database" style="display:none; color:var(--success);">💽 DB: <span class="pstat-val" id="stat-db">0</span></div>
+      <div class="pstat" id="stat-already-wrap" title="Already Scraped (Skipped)" style="display:none;">⏭️ Dupes: <span class="pstat-val" id="stat-already">0</span></div>
     </div>
 
     <div style="display:flex; gap:10px; margin-top:16px;">
@@ -1178,6 +1191,17 @@
       <strong>Scrape Failed</strong>
       <span id="error-msg"></span>
     </div>
+    <!-- Rescue download: shown when scraper crashed but has partial data -->
+    <div id="rescue-download-section" style="display:none; margin-top:16px;">
+      <div class="info-box" style="border-left:4px solid var(--warning); background:var(--warning-bg); margin-top:0;">
+        <b>⚠️ Partial Data Rescued!</b>
+        <span id="rescue-count-msg">Some products were saved before the crash.</span>
+      </div>
+      <button class="btn btn-download" id="rescue-download-btn" onclick="downloadFile()" style="margin-top:12px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Download Rescued Data
+      </button>
+    </div>
     <div class="info-box" style="margin-top:12px; background:var(--surface);">
       <b>Quick Fixes:</b>
       <ul style="margin-top:6px; margin-left:22px; color:var(--text3); font-size:13px; line-height:1.6;">
@@ -1193,6 +1217,24 @@
         Try Again
       </button>
     </div>
+  </div>
+
+  <!-- ── NO PRODUCTS FOUND CARD (Dynamic messages based on finish_reason) ── -->
+  <div class="card" id="no-products-section" style="display:none;">
+    <div class="info-box" id="no-products-info" style="border-left: 4px solid var(--accent);">
+      <strong style="color:var(--text); font-size:15px; margin-bottom:8px" id="no-products-title">No Products Found</strong>
+      <div id="no-products-message" style="word-break: break-word; color:var(--text2); line-height:1.5; font-size:13px;">
+        The scraper successfully finished, but could not find any products matching your exact criteria.
+      </div>
+    </div>
+    <div style="text-align:center; margin-top: 16px;">
+      <button class="footer-link" onclick="resetApp()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        Revise Search &amp; Try Again
+      </button>
+    </div>
+  </div>
+
   <!-- ── FOOTER ── -->
   <footer style="text-align:center; padding-top: 40px; border-top: 1px solid var(--border); margin-top: 60px;">
     <p style="color: var(--text3); font-size: 13px; font-weight: 500;">
@@ -1282,6 +1324,19 @@ function showToast(message, type = 'info') {
 // ─── KEYBOARD SHORTCUT ───
 function handleEnter(e) {
   if (e.key === 'Enter') startScrape();
+}
+
+function updateSearchLabel() {
+  const mode = document.getElementById('search-mode-select').value;
+  const label = document.getElementById('keyword-label');
+  const input = document.getElementById('keyword-input');
+  if (mode === 'brand') {
+    label.innerHTML = 'Brand Name <span class="optional">Strict</span>';
+    input.placeholder = 'e.g. Plum, Cetaphil, Mamaearth...';
+  } else {
+    label.innerHTML = 'Search Keyword';
+    input.placeholder = 'e.g. herbal face wash, protein powder...';
+  }
 }
 
 function updateCounterUI(targetCount) {
@@ -1390,6 +1445,7 @@ async function startScrape() {
   const max = document.getElementById('max-slider').value;
   const deliveryFilter = document.getElementById('delivery-toggle').checked;
   const pincode = document.getElementById('pincode-input').value.trim();
+  const searchMode = document.getElementById('search-mode-select').value;
 
   if (!url) { flash('url-input', 'Please enter a website URL'); return; }
   if (!keyword) { flash('keyword-input', 'Please enter a search keyword'); return; }
@@ -1401,10 +1457,10 @@ async function startScrape() {
   document.getElementById('scrape-btn').disabled = true;
   document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Starting...';
   // Disable inputs during scrape
-  document.querySelectorAll('#setup-section input, #setup-section button, #setup-section select').forEach(el => el.disabled = true);
+  document.querySelectorAll('#config-card input, #config-card button, #config-card select').forEach(el => el.disabled = true);
   document.querySelectorAll('.kw-chip').forEach(el => el.style.pointerEvents = 'none');
 
-  hide('result-section'); hide('error-section'); hide('data-section');
+  hide('result-section'); hide('error-section'); hide('data-section'); hide('no-products-section');
   logCache = []; allProducts = []; filteredProducts = [];
   document.getElementById('log-box').innerHTML = '';
   document.getElementById('prod-count').textContent = '0';
@@ -1430,7 +1486,7 @@ async function startScrape() {
     const res = await fetch('/api/scrape', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url, keyword, max_products: parseInt(max), pincode, delivery_filter: deliveryFilter })
+      body: JSON.stringify({ url, keyword, max_products: parseInt(max), pincode, delivery_filter: deliveryFilter, search_mode: searchMode })
     });
     const data = await res.json();
     if (data.error) { showError(data.error); resetBtn(); return; }
@@ -1509,6 +1565,14 @@ async function pollStatus() {
       document.getElementById('stat-delivery-wrap').style.display = 'inline-flex';
       document.getElementById('stat-delivery').textContent = job.delivery_skipped;
     }
+    if (job.db_saved_count !== undefined && job.db_saved_count > 0) {
+      document.getElementById('stat-db-wrap').style.display = 'inline-flex';
+      document.getElementById('stat-db').textContent = job.db_saved_count;
+    }
+    if (job.already_scraped_count !== undefined && job.already_scraped_count > 0) {
+      document.getElementById('stat-already-wrap').style.display = 'inline-flex';
+      document.getElementById('stat-already').textContent = job.already_scraped_count;
+    }
 
     // Live stream table
     livePollCount++;
@@ -1548,24 +1612,97 @@ async function pollStatus() {
       clearInterval(pollInterval);
       setStatusBadge('done');
       document.getElementById('prog-bar').style.width = '100%';
-      document.getElementById('res-total').textContent = job.total || job.found;
-      document.getElementById('res-fields').textContent = Object.keys(allProducts[0] || {}).length || 22;
-      document.getElementById('res-pages').textContent = Math.ceil((job.total || job.found) / (allProducts.length ? PAGE_SIZE : 20)) || '—';
       document.getElementById('cancel-btn').style.display = 'none';
       
-      showToast(`Scrape complete! Successfully captured ${job.total || job.found || 0} products.`, 'success');
+      const totalYield = (allProducts && allProducts.length) ? allProducts.length : (job.success_count || 0);
 
-      setTimeout(() => {
-        show('result-section'); hide('progress-section'); resetBtn();
-        fetchTableData().then(() => showDataTable());
-      }, 600);
+      if (totalYield > 0) {
+        document.getElementById('res-total').textContent = totalYield;
+        document.getElementById('res-fields').textContent = Object.keys(allProducts[0] || {}).length || 22;
+        document.getElementById('res-pages').textContent = job.pages_scraped || '—';
+        
+        showToast(`Scrape complete! Successfully captured ${totalYield} products.`, 'success');
+
+        setTimeout(() => {
+          show('result-section'); hide('progress-section'); resetBtn();
+          fetchTableData().then(() => showDataTable());
+        }, 600);
+      } else {
+        // Handle zero-yield scenarios with specific messages based on finish_reason
+        const reason = job.finish_reason || 'no_products_on_site';
+        const keyword = job.keyword || '';
+        const totalFound = job.total_candidates_found || 0;
+        const brandFiltered = job.brand_filtered_count || 0;
+        const alreadyScraped = job.already_scraped_count || 0;
+        const titleEl = document.getElementById('no-products-title');
+        const msgEl = document.getElementById('no-products-message');
+        const infoBox = document.getElementById('no-products-info');
+        
+        if (reason === 'brand_mismatch') {
+          titleEl.textContent = '🏷️ Brand Not Found on Amazon';
+          msgEl.innerHTML = `The scraper found <strong>${totalFound}</strong> products on Amazon, but <strong>none</strong> matched the brand "<strong>${escHtml(keyword)}</strong>" exactly.<br><br>` +
+            `<strong>Suggestions:</strong><br>` +
+            `• Double-check the brand name spelling<br>` +
+            `• Try switching to <strong>Category / Generic Keyword</strong> mode<br>` +
+            `• The brand may not sell on this Amazon marketplace`;
+          infoBox.style.borderLeftColor = 'var(--warning)';
+          showToast(`No products match brand "${keyword}" — ${totalFound} found but filtered out.`, 'info');
+        } else if (reason === 'all_already_scraped') {
+          titleEl.textContent = '💽 All Products Already Scraped';
+          msgEl.innerHTML = `All <strong>${alreadyScraped}</strong> matching products for "<strong>${escHtml(keyword)}</strong>" have already been scraped and saved to the database.<br><br>` +
+            `<strong>Nothing new to download.</strong> Your previous scrape data is safe in the database.`;
+          infoBox.style.borderLeftColor = 'var(--success)';
+          showToast(`All ${alreadyScraped} products already scraped — nothing new.`, 'info');
+        } else if (reason === 'mixed_already_scraped_and_brand') {
+          titleEl.textContent = '💽🏷️ No New Products Found';
+          msgEl.innerHTML = `Out of <strong>${totalFound}</strong> products found:<br>` +
+            `• <strong>${alreadyScraped}</strong> were already scraped (in database)<br>` +
+            `• <strong>${brandFiltered}</strong> didn't match brand "<strong>${escHtml(keyword)}</strong>"<br><br>` +
+            `No new products to download.`;
+          infoBox.style.borderLeftColor = 'var(--accent)';
+          showToast('No new products — all matched items already scraped.', 'info');
+        } else {
+          // Default: no_products_on_site
+          titleEl.textContent = '📭 No Products Found';
+          msgEl.innerHTML = `The scraper could not find any products matching "<strong>${escHtml(keyword)}</strong>" on this website.<br><br>` +
+            `<strong>Suggestions:</strong><br>` +
+            `• Check if the keyword exists on the site<br>` +
+            `• Try a different keyword or broader search term<br>` +
+            `• If using Brand mode, try switching to Category mode`;
+          infoBox.style.borderLeftColor = 'var(--accent)';
+          showToast('Scrape finished — no products found for this keyword.', 'info');
+        }
+        
+        show('no-products-section'); 
+        hide('progress-section'); 
+        hide('error-section');
+        resetBtn();
+      }
     }
 
     if (job.status === 'error') {
       clearInterval(pollInterval);
       setStatusBadge('error');
-      showError(job.error || 'An unknown error occurred.');
-      hide('progress-section'); resetBtn();
+      
+      // Check if scraper rescued any partial data before crashing
+      const rescuedProducts = job.products || [];
+      if (rescuedProducts.length > 0) {
+        allProducts = rescuedProducts;
+        filteredProducts = [...allProducts];
+        showToast(`⚠️ Scraper crashed! ${rescuedProducts.length} products were rescued.`, 'error');
+        // Show error section with rescue download button
+        showError(job.error || 'An unknown error occurred.');
+        document.getElementById('rescue-download-section').style.display = 'block';
+        document.getElementById('rescue-count-msg').textContent = 
+          `${rescuedProducts.length} products were saved before the crash. Click below to download them.`;
+        hide('progress-section'); resetBtn();
+        // Also show the data table with rescued products
+        fetchTableData().then(() => showDataTable());
+      } else {
+        showError(job.error || 'An unknown error occurred.');
+        document.getElementById('rescue-download-section').style.display = 'none';
+        hide('progress-section'); resetBtn();
+      }
     }
 
   } catch (e) {
@@ -1679,14 +1816,34 @@ function scrollTableTop() { document.getElementById('table-scroll').scrollTop = 
 function truncate(s, len) { return !s ? '' : s.length > len ? s.substring(0, len) + '…' : s; }
 function escHtml(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
-function downloadFile() {
+async function downloadFile() {
   if (!currentJobId) return;
   const btn = document.getElementById('download-btn');
-  if (btn) btn.innerHTML = '<div class="spinner" style="border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Downloading...';
+  const rescueBtn = document.getElementById('rescue-download-btn');
+  const activeBtn = btn || rescueBtn;
+  if (activeBtn) activeBtn.innerHTML = '<div class="spinner" style="border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Saving & Downloading...';
+  
+  // Step 1: Save to DB (on-demand, only on download click)
+  try {
+    const dbRes = await fetch(`/api/save-to-db/${currentJobId}`, { method: 'POST' });
+    const dbData = await dbRes.json();
+    if (dbData.count > 0) {
+      showToast(`💽 ${dbData.count} products saved to database`, 'success');
+    }
+  } catch (e) {
+    console.warn('DB save skipped:', e);
+  }
+  
+  // Step 2: Trigger file download
   window.location.href = `/api/download/${currentJobId}`;
   showToast('Download started', 'success');
+  
+  // Clear localStorage after successful download
+  localStorage.removeItem('scrapling_currentJobId');
+  
   setTimeout(() => {
     if (btn) btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Excel';
+    if (rescueBtn) rescueBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Rescued Data';
   }, 2000);
 }
 
@@ -1734,10 +1891,27 @@ function setStatusBadge(state) {
 function resetApp() {
   localStorage.removeItem('scrapling_currentJobId');
   currentJobId = null; clearInterval(pollInterval); livePollCount = 0;
-  hide('result-section'); hide('error-section'); hide('progress-section'); hide('data-section');
+  hide('result-section'); hide('error-section'); hide('progress-section'); hide('data-section'); hide('no-products-section');
   allProducts = []; filteredProducts = [];
   document.getElementById('main-wrap').style.display = 'block';
+  // Hide rescue section if visible
+  document.getElementById('rescue-download-section').style.display = 'none';
   resetBtn();
+}
+
+function clearAllData() {
+  if (!confirm('Clear all cached data and reset the app? This will stop any active scraping.')) return;
+  clearInterval(pollInterval);
+  localStorage.removeItem('scrapling_currentJobId');
+  localStorage.removeItem('theme'); // Keep theme? No — user asked for full cleanup
+  currentJobId = null;
+  allProducts = []; filteredProducts = []; logCache = []; livePollCount = 0; pollFailCount = 0;
+  hide('result-section'); hide('error-section'); hide('progress-section'); hide('data-section'); hide('no-products-section');
+  document.getElementById('main-wrap').style.display = 'block';
+  document.getElementById('rescue-download-section').style.display = 'none';
+  document.getElementById('log-box').innerHTML = '';
+  resetBtn();
+  showToast('All cached data cleared successfully', 'success');
 }
 
 function resetBtn() {
@@ -1746,7 +1920,7 @@ function resetBtn() {
   btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> Start Scraping';
   
   // Re-enable inputs
-  document.querySelectorAll('#setup-section input, #setup-section button, #setup-section select').forEach(el => el.disabled = false);
+  document.querySelectorAll('#config-card input, #config-card button, #config-card select').forEach(el => el.disabled = false);
   document.querySelectorAll('.kw-chip').forEach(el => el.style.pointerEvents = 'auto');
   
   // Reset cancel UI
@@ -1770,17 +1944,77 @@ function hide(id) { document.getElementById(id).style.display = 'none'; }
 // Init ETA on load
 updateETA();
 
-// Resume Job on Refresh
+// Resume Job on Refresh — HARDENED to prevent stale-data issues
 document.addEventListener("DOMContentLoaded", () => {
     const savedJobId = localStorage.getItem('scrapling_currentJobId');
     if (savedJobId) {
-        currentJobId = savedJobId;
-        show('progress-section');
-        document.getElementById('scrape-btn').disabled = true;
-        document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Resuming...';
-        document.querySelectorAll('#setup-section input, #setup-section button, #setup-section select').forEach(el => el.disabled = true);
-        pollInterval = setInterval(pollStatus, 3000);
-        pollStatus(); // fetch immediately
+        fetch(`/api/status/${savedJobId}`).then(res => {
+            if (!res.ok) {
+                // Server restarted or job expired — clean up silently
+                localStorage.removeItem('scrapling_currentJobId');
+                showToast('Previous session expired. Ready for a new scrape.', 'info');
+                return;
+            }
+            return res.json();
+        }).then(job => {
+            if (!job) return; // Already handled above
+            
+            currentJobId = savedJobId;
+            
+            if (job.status === 'done') {
+                // Job already finished — show results, DON'T re-scrape
+                allProducts = job.products || [];
+                filteredProducts = [...allProducts];
+                const totalYield = allProducts.length;
+                if (totalYield > 0) {
+                    document.getElementById('res-total').textContent = totalYield;
+                    document.getElementById('res-fields').textContent = Object.keys(allProducts[0] || {}).length || 22;
+                    document.getElementById('res-pages').textContent = Math.ceil(totalYield / PAGE_SIZE) || '—';
+                    show('result-section');
+                    showDataTable();
+                    showToast('Previous scrape results restored.', 'info');
+                } else {
+                    show('no-products-section');
+                }
+            } else if (job.status === 'error') {
+                // Job errored — show error with rescue data if available
+                const rescuedProducts = job.products || [];
+                if (rescuedProducts.length > 0) {
+                    allProducts = rescuedProducts;
+                    filteredProducts = [...allProducts];
+                    showError(job.error || 'Previous scrape failed.');
+                    document.getElementById('rescue-download-section').style.display = 'block';
+                    document.getElementById('rescue-count-msg').textContent = 
+                        `${rescuedProducts.length} products were rescued. Click below to download them.`;
+                    showDataTable();
+                } else {
+                    showError(job.error || 'Previous scrape failed.');
+                    document.getElementById('rescue-download-section').style.display = 'none';
+                }
+                showToast('Previous scrape had an error. You can download rescued data or try again.', 'info');
+            } else if (job.status === 'running' || job.status === 'queued') {
+                // Job is still running — resume polling
+                show('progress-section');
+                document.getElementById('scrape-btn').disabled = true;
+                document.getElementById('scrape-btn').innerHTML = '<div class="spinner"></div> Resuming...';
+                document.querySelectorAll('#config-card input, #config-card button, #config-card select').forEach(el => el.disabled = true);
+                if (job.url) document.getElementById('prog-site').textContent = job.url;
+                
+                // Immediately fetch data to prevent UI layout shift or "lost items" feel
+                fetchTableData().then(() => { if (allProducts.length > 0) showDataTable(); });
+                
+                pollInterval = setInterval(pollStatus, 3000);
+                pollStatus(); // fetch immediately
+                showToast('Resuming active scrape...', 'info');
+            } else {
+                // Unknown status — clear and reset
+                localStorage.removeItem('scrapling_currentJobId');
+            }
+        }).catch(err => {
+            console.log('Backend offline, clearing stale session...');
+            localStorage.removeItem('scrapling_currentJobId');
+            showToast('Backend offline. Cleared previous session.', 'info');
+        });
     }
 });
 </script>
