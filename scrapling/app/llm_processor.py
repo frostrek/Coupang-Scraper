@@ -77,7 +77,7 @@ def _normalize_weight_unit(value: str) -> str:
     value = re.sub(r'(\d),(\d{3})(?!\d)', r'\1\2', value)
     m = re.search(r'(\d+(?:\.\d+)?)\s*[-\s]?\s*(gm|gram|grams|g|kg|kilogram|kilograms|kgs|oz|ounce|ounces|lb|lbs|pound|pounds)\b', value, re.I)
     if not m:
-        return value
+        return ''
     amount, unit = float(m.group(1)), m.group(2).lower()
     
     # BROAD REJECTION: for electronic devices, 5g/4g/3g/6g NEVER refer to weight.
@@ -108,12 +108,12 @@ def _normalize_volume_unit(value: str) -> str:
     value = value.strip()
     # Pre-process: normalize comma-separated numbers (1,000 -> 1000)
     value = re.sub(r'(\d),(\d{3})(?!\d)', r'\1\2', value)
-    m = re.search(r'(\d+(?:\.\d+)?)\s*[-\s]?\s*(ml|mls|millilitre|milliliter|millilitres|milliliters|fl\.?\s*oz\.?|fluid\s*ounce|cc|l|litre|liter|liters|litres|oz|ounce|ounces)\b', value, re.I)
+    m = re.search(r'(\d+(?:\.\d+)?)\s*[-\s]?\s*(ml|mls|millilitre|milliliter|millilitres|milliliters|fl\.?\s*oz\.?|fluid\s*ounce|cc|l|litre|liter|liters|litres|ltr|ltrs|oz|ounce|ounces)\b', value, re.I)
     if not m:
-        return value
+        return ''
     amount, unit = float(m.group(1)), m.group(2).lower().strip('.')
     
-    if unit in ('l', 'litre', 'liter', 'liters', 'litres'):
+    if unit in ('l', 'litre', 'liter', 'liters', 'litres', 'ltr', 'ltrs'):
         if amount < 1:
             amount, unit = amount * 1000, 'ml'
         else:
@@ -609,7 +609,7 @@ Even if the input description and specs are empty, write a professional descript
                 name = product.get('Product Name', '')
                 combined = f"{name} {desc}"
                 # Quick regex scan for any weight/volume pattern
-                wv_regex = r'\b(\d+(?:[,.]\d+)?)\s*[-\s]?\s*(kg|kgs|gm|gram|grams|g|ml|mls|l|litre|liter|oz|ounce|fl\.?\s*oz\.?|cc|lb|lbs|pound)s?\b'
+                wv_regex = r'\b(\d+(?:[,.]\d+)?)\s*[-\s]?\s*(kg|kgs|gm|gram|grams|g|ml|mls|l|litre|liter|ltr|ltrs|oz|ounce|fl\.?\s*oz\.?|cc|lb|lbs|pound)s?\b'
                 wv_match = re.search(wv_regex, combined, re.I)
                 if wv_match:
                     raw_amount = wv_match.group(1).replace(',', '')
@@ -641,10 +641,10 @@ Even if the input description and specs are empty, write a professional descript
             err_msg = str(e)
             print(f"[Gemini] Attempt {attempt + 1}/{max_retries} failed: {err_msg}")
             
-            # If it's a rate limit error, wait briefly and retry
-            if "429" in err_msg or "quota" in err_msg.lower() or "rate" in err_msg.lower():
-                wait_time = 2 * (attempt + 1)
-                print(f"[Gemini] Rate limited. Waiting {wait_time}s before retry...")
+            # If it's a rate limit or high demand (503) error, wait with backoff and retry
+            if any(k in err_msg.lower() for k in ["429", "503", "quota", "rate", "unavailable", "overloaded"]):
+                wait_time = 3 * (attempt + 1)
+                print(f"[Gemini] API Busy/Limited. Waiting {wait_time}s before retry...")
                 time.sleep(wait_time)
                 continue
             

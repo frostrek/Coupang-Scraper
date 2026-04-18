@@ -15,10 +15,25 @@ def extract_price(t):
     # Strip per-unit pricing patterns like "(₹999 / 100g)" but NOT arbitrary slashes (URLs etc.)
     t = re.sub(r'[₹$€£¥]?\s*[\d,]+\.?\d*\s*/\s*\d*\s*(?:gm?|gram|grams|kg|ml|l|oz|lb|unit|piece|count|tablet|capsule|sachet|strip|pack)\b', '', t, flags=re.I)
     
+    def _format_decimals(price_str):
+        if not price_str: return price_str
+        m = re.search(r'([\d,]+)(?:\.(\d+))?', price_str)
+        if m:
+            whole = m.group(1)
+            frac = m.group(2)
+            if not frac:
+                frac = "00"
+            elif len(frac) == 1:
+                frac += "0"
+            elif len(frac) > 2:
+                frac = frac[:2]
+            return price_str[:m.start()] + f"{whole}.{frac}" + price_str[m.end():]
+        return price_str
+
     # Find a price pattern: optional currency symbol, then digits with optional commas and decimal
     m = re.search(r'([₹$€£¥])\s*([\d,]+\.?\d*)', t)
     if m:
-        return (m.group(1) + m.group(2)).strip()
+        return _format_decimals((m.group(1) + m.group(2)).strip())
     
     # Fallback: just digits with commas/decimals (no currency symbol)
     m = re.search(r'([\d,]+\.?\d+)', t)
@@ -30,7 +45,7 @@ def extract_price(t):
                 return ''
         except ValueError:
             pass
-        return val.strip()
+        return _format_decimals(val.strip())
     
     return ''
 

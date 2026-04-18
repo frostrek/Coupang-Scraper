@@ -36,7 +36,7 @@ def fetch_pdp_fast(url, retries=2, pincode=''):
     
     If pincode is provided, sets Amazon's delivery location cookie so the PDP
     returns location-specific delivery estimates."""
-    BROWSERS = ["chrome116", "chrome120", "chrome124", "edge116", "chrome131"]
+    BROWSERS = ["chrome120", "chrome124"]
     for attempt in range(retries):
         try:
             headers = header_gen.generate(browser={'name': 'chrome'})
@@ -468,14 +468,13 @@ def fetch_product_details(url, existing_p, fetcher=None):
             return None  # Product is dead or unavailable, abort scraping
     
     # 2. Page-level broad check for "No featured offers available" widget
-    buybox_text = soup.select_one('#buybox, #desktop_buybox, #rightCol')
-    if buybox_text:
-        bb_text = buybox_text.get_text().lower()
-        if 'no featured offers available' in bb_text or 'see all buying options' in bb_text:
-             if 'add to cart' not in bb_text and 'buy now' not in bb_text:
-                 return None # No direct buy box available
-
-
+    # STRICTER OUT-OF-STOCK CHECK
+    for el in soup.select('#buybox, #desktop_buybox, #rightCol, #availability, #deliveryBlockMessage'):
+        txt = el.get_text().lower()
+        if 'no featured offers available' in txt or 'currently unavailable' in txt or 'out of stock' in txt:
+            return None # Strict unavailability indicator
+        if 'see all buying options' in txt and 'add to cart' not in txt:
+            return None # No direct buy box available
     # ─────────────────────────────────────────────────────────────────────
     #  PDP MAIN IMAGE UPGRADE — Get the hero/landing image at full resolution
     #  HARDENED: Rejects images from review/recommendation/carousel ancestors
@@ -527,106 +526,163 @@ def fetch_product_details(url, existing_p, fetcher=None):
     # ─────────────────────────────────────────────────────────────────────
     # PDP PRICE EXTRACTION (More accurate than SERP)
     # ─────────────────────────────────────────────────────────────────────
-    # ─── Sale Price = MRP / Striked / Original price (the higher crossed-out one) ───
-    pdp_mrp = None
-    for sel in [
-        'span.priceBlockStrikePriceString',
-        '#listPrice',
-        'span.basisPrice span.a-offscreen',
-        'span[data-a-strike="true"] span.a-offscreen',
-        'span.a-text-strike',
-        'del span.a-offscreen',
-    ]:
-        for el in soup.select(sel):
-            # Global exclusion for carousels, sponsored sections, and sidebars (Recent Items)
-            if el.find_parent(class_=re.compile(r'carousel|sponsored|similar|recommendation|rhf-border|rhf-results-|percolate-', re.I)) or el.find_parent(id=re.compile(r'rhf|HLCXComparisonWidget|similarFeatures|percolate|recommendations', re.I)):
-                continue
-            val = extract_price(el.get_text())
-            if val and re.search(r'\d', val):
-                pdp_mrp = val
-                break
-        if pdp_mrp:
-            break
-
-    # Fallback: look for "M.R.P.:" text pattern specifically (Amazon India)
-    if not pdp_mrp:
-        mrp_label = soup.find(string=re.compile(r'M\.?R\.?P\.?\s*:?', re.I))
-        if mrp_label:
-            parent = mrp_label.find_parent()
-            if parent:
-                price_el = parent.find_next('span', class_=re.compile(r'a-offscreen|a-price'))
-                if price_el:
-                    val = extract_price(price_el.get_text())
-                    if val and re.search(r'\d', val):
-                        pdp_mrp = val
-
-    # ─── Discount Base Price = Current discounted price (what buyer actually pays) ───
-    pdp_disc = None
-    for sel in [
-        'span.priceToPay span.a-offscreen',
-        '#priceblock_dealprice',
-        '#priceblock_ourprice',
-        '.a-price[data-a-size="xl"] span.a-offscreen',
-        '.a-price[data-a-size="l"] span.a-offscreen',
-        '.a-price[data-a-size="b"] span.a-offscreen',
-        '#corePrice_feature_div span.a-offscreen',
-        '#corePriceDisplay_desktop_feature_div span.a-offscreen',
-        '.a-price:not([data-a-strike="true"]):not(.a-text-strike) span.a-offscreen',
-    ]:
-        for el in soup.select(sel):
-            # Global exclusion for carousels, sponsored sections, and sidebars
-            if el.find_parent(class_=re.compile(r'carousel|sponsored|similar|recommendation|rhf-border|rhf-results-|percolate-', re.I)) or el.find_parent(id=re.compile(r'rhf|HLCXComparisonWidget|similarFeatures|percolate|recommendations', re.I)):
-                continue
-            if el.find_parent(id=re.compile(r'delivery|price-shipping', re.I)):
-                continue
-            # STRICT UNIT PRICE REJECTION
-            parent_sec = el.find_parent('span', class_=re.compile(r'a-color-secondary|a-size-small|a-size-mini'))
-            if parent_sec and '/' in parent_sec.get_text():
-                continue
-                
-            val = extract_price(el.get_text())
-            if val and re.search(r'\d', val):
-                pdp_disc = val
-                break
-        if pdp_disc:
-            break
-
-    # ─────────────────────────────────────────────────────────────────────
-    #  PDP PRICE MAPPING (AUTHORITATIVE — only source of truth)
+    # PDP PRICE EXTRACTION v3 — Hardened for Amazon India + Global
     #
-    #  Sale Price      = MRP / Striked / Original (the higher, crossed-out price)
+    #  Sale Price      = MRP / Striked / Original (the higher, crossed-out one)
     #  Discount Base   = Current / Discounted (what buyer actually pays)
-    #
-    #  If product has NO discount (single price only):
-    #    Sale Price = Discount Base Price = that single price
     # ─────────────────────────────────────────────────────────────────────
-    if pdp_mrp and pdp_disc:
-        # Both prices found: MRP is the higher/original, disc is the lower/current
-        try:
-            mrp_val = float(re.sub(r'[^\d.]', '', pdp_mrp))
-            disc_val = float(re.sub(r'[^\d.]', '', pdp_disc))
+    # Constrain price queries to the main product section
+    price_context = (
+        soup.select_one('#corePriceDisplay_desktop_feature_div') or
+        soup.select_one('#corePrice_desktop') or
+        soup.select_one('#corePrice_feature_div') or
+        soup.select_one('#centerCol') or
+        soup
+    )
+
+    def _is_junk_price_ancestor(el):
+        """Returns True if this price element is inside a carousel, EMI, coupon, Save block, or is a Unit Price."""
+        # ── EXPLICIT UNIT PRICE CLASS MATCHING ──
+        el_classes = ' '.join(el.get('class', [])).lower()
+        if 'priceperunit' in el_classes or 'ppu' in el_classes:
+            return True
             
-            if mrp_val >= disc_val:
-                # Normal case: MRP ≥ discounted price
-                p['Sale Price'] = pdp_mrp
-                p['Discount Base Price'] = pdp_disc
-            else:
-                # Selectors grabbed them backwards — swap
-                p['Sale Price'] = pdp_disc
-                p['Discount Base Price'] = pdp_mrp
-        except (ValueError, TypeError):
-            # Couldn't parse — just assign as-is
-            p['Sale Price'] = pdp_mrp
-            p['Discount Base Price'] = pdp_disc
-    elif pdp_mrp:
-        # Only MRP found, no discount — set both to same
-        p['Sale Price'] = pdp_mrp
-        p['Discount Base Price'] = pdp_mrp
-    elif pdp_disc:
-        # Only current price found, no MRP — set both to same
-        p['Sale Price'] = pdp_disc
-        p['Discount Base Price'] = pdp_disc
-    # else: both empty — no price on PDP (rare, product may be unavailable)
+        parent = el.parent
+        parent_classes = ' '.join(parent.get('class', [])).lower() if parent else ''
+        if 'priceperunit' in parent_classes or 'ppu' in parent_classes:
+            return True
+
+        if el.find_parent(class_=re.compile(r'carousel|sponsored|similar|recommendation|compare|comparison|rhf-border|rhf-results-|percolate-', re.I)):
+            return True
+        if el.find_parent(id=re.compile(r'rhf|compare|comparison|HLCX|similarFeatures|percolate|recommendations', re.I)):
+            return True
+        if el.find_parent(id=re.compile(r'emi|sns|coupon|promo|delivery|price-shipping', re.I)):
+            return True
+        if el.find_parent(class_=re.compile(r'emi|sns|coupon|promo', re.I)):
+            return True
+        
+        # Look higher up for text indicating this is an offer/save amount, not the main price
+        # Amazon often renders "Save ₹50 (20%)" in a div alongside the price. If we grab the 50, it breaks the lowest-price logic.
+        wrapper = el.find_parent('tr') or el.find_parent('div', class_=re.compile(r'a-section|a-row|savings', re.I)) or el.parent
+        wrapper_txt = (wrapper.get_text() or '').lower()
+        if any(kw in wrapper_txt for kw in ['save', 'coupon', 'emi ', 'subscribe', 'cashback', 'with exchange']):
+            # Exception: Sometimes the wrapper contains the main price AND the "save" text inside it. 
+            # If the wrapper text is extremely long, it might be the whole buybox.
+            if len(wrapper_txt) < 150: 
+                # If the element itself is the strike-through MRP, it's NOT a save amount even if "save" is nearby.
+                is_strike = (
+                    el.get('data-a-strike') == 'true' or
+                    el.find_parent(attrs={'data-a-strike': 'true'}) or
+                    el.find_parent('span', class_=re.compile(r'a-text-strike', re.I)) or
+                    el.find_parent('del')
+                )
+                if not is_strike:
+                    return True
+            
+        # ── ROBUST UNIT PRICE REJECTION ──
+        # Critical fix: If 'el' is already the .a-price span, use it directly. Otherwise look at parent.
+        tgt_class = el.get('class') or []
+        parent_price = el if 'a-price' in tgt_class else el.find_parent('span', class_='a-price')
+        
+        if parent_price:
+            next_sib = parent_price.find_next_sibling(string=True)
+            if next_sib and '/' in next_sib:
+                return True
+            prev_sib = parent_price.find_previous_sibling(string=True)
+            if prev_sib and '/' in prev_sib:
+                return True
+            # Check the immediate wrapping span text just in case, heavily scoped length
+            parent_span = parent_price.parent
+            if parent_span and parent_span.name == 'span':
+                span_txt = parent_span.get_text()
+                if len(span_txt) < 50 and re.search(r'/\s*\d*\s*(?:gm?|gram|grams|kg|ml|l|oz|lb|unit|piece|count)', span_txt, re.I):
+                    return True
+                    
+        # Extra layer of unit price rejection stringency:
+        # Check if the text actually extracted by the regex was immediately followed by a slash somewhere in its container
+        # CRITICAL FIX: Only apply this to small, tight containers. If applied to large containers (like the whole div),
+        # it rejects the actual main price because the container encompasses the unit price too!
+        parent_text = el.parent.get_text()
+        if len(parent_text) < 50:
+            if re.search(r'/\s*\d*\s*(?:gm?|gram|grams|kg|ml|l|oz|lb|unit|piece|count)', parent_text, re.I):
+                return True
+            
+        return False
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PDP PRICE EXTRACTION v5 — Fail-proof Highest/Lowest + Unit Price Fix
+    # ─────────────────────────────────────────────────────────────────────
+    # Find all prices inside the main buy box / center section
+    price_context = (
+        soup.select_one('#corePriceDisplay_desktop_feature_div') or
+        soup.select_one('#corePrice_desktop') or
+        soup.select_one('#corePrice_feature_div') or
+        soup.select_one('#centerCol') or
+        soup.select_one('#desktop_buybox') or
+        soup
+    )
+
+    extracted_prices = []
+    
+    # 1. Grab EVERY price container in the price context (including those without .a-offscreen)
+    for el in price_context.select('.a-price, .a-text-price, .basisPrice, .priceBlockStrikePriceString, .a-text-strike'):
+        if _is_junk_price_ancestor(el):
+            continue
+            
+        # Amazon often duplicates prices inside containers (e.g. <offscreen>₹248</offscreen><aria-hidden>₹248</aria-hidden>)
+        # so el.get_text() might be "₹248.00₹248.00". extract_price elegantly pulls the first valid number.
+        txt = el.get_text(separator=' ')
+        val = extract_price(txt)
+        if val and re.search(r'\d', val):
+            # Parse numeric value for sorting
+            try:
+                num_val = float(re.sub(r'[^\d.]', '', val))
+                extracted_prices.append((num_val, val))
+            except (ValueError, TypeError):
+                pass
+                
+    # 2. Check for explicit MRP text label as an additional fallback (Amazon India)
+    for mrp_label in price_context.find_all(string=re.compile(r'M\.?R\.?P\.?\s*:?', re.I)):
+        parent = mrp_label.find_parent()
+        if parent:
+            # Look broadly at the next span since format can vary
+            price_el = parent.find_next('span', class_=re.compile(r'a-offscreen|a-price|a-text-strike|a-color-secondary'))
+            if price_el and not _is_junk_price_ancestor(price_el):
+                val = extract_price(price_el.get_text())
+                if val and re.search(r'\d', val):
+                    try:
+                        num_val = float(re.sub(r'[^\d.]', '', val))
+                        extracted_prices.append((num_val, val))
+                    except:
+                        pass
+
+    # 3. Deduplicate and order the prices
+    unique_prices = []
+    seen_nums = set()
+    for num, txt in extracted_prices:
+        if num not in seen_nums:
+            seen_nums.add(num)
+            unique_prices.append((num, txt))
+            
+    # Sort descending (highest price first, lowest price last)
+    unique_prices.sort(key=lambda x: x[0], reverse=True)
+
+    # 4. Map the Prices precisely
+    if len(unique_prices) >= 2:
+        # At least two distinct prices found:
+        # Highest = Original MRP (Sale Price)
+        # Lowest = Current Discounted Price (Discount Base Price)
+        p['Sale Price'] = unique_prices[0][1]
+        p['Discount Base Price'] = unique_prices[-1][1]
+    elif len(unique_prices) == 1:
+        # Exactly one price found: product is not on discount
+        single_price = unique_prices[0][1]
+        p['Sale Price'] = single_price
+        p['Discount Base Price'] = single_price
+    else:
+        # NO PRICES FOUND = Product is unavailable or out of stock. 
+        # We must ABORT scraping this product so it doesn't appear in the sheet.
+        return None
 
     about_item = soup.select_one('#feature-bullets')
     if about_item:
@@ -641,7 +697,24 @@ def fetch_product_details(url, existing_p, fetcher=None):
         sanitized_desc, _desc_changes = compliance_sanitize_text(raw_desc)
         p['Detailed Description'] = sanitized_desc
 
-    # 2. Extract Technical Specs / Item Details (Brand, Manufacturer, ASIN)
+    # ── Variant / Size Extraction from active swatches ──
+    variant_size = None
+    size_block = soup.select_one('#variation_size_name .selection, #variation_color_name .selection')
+    if size_block:
+        variant_size = size_block.get_text(strip=True)
+    if not variant_size:
+        swatch = soup.select_one('li.swatchSelect[data-dp-url] .twisterTextSpan, button.swatchAvailable.selected .twisterTextSpan')
+        if swatch:
+            variant_size = swatch.get_text(strip=True)
+            
+    if variant_size:
+        v_low = variant_size.lower()
+        if any(u in v_low for u in ['ml', 'liter', 'litre', ' l ', 'oz', 'fl oz']):
+            p['Volume'] = variant_size
+        elif any(u in v_low for u in [' g', 'kg', 'gram', 'ounce', 'pound', ' lb']):
+            p['Weight'] = variant_size
+
+    # ── PHASE 2: Deep Extraction from PDP Tables (Product Information / Technical Details) (Brand, Manufacturer, ASIN)
     spec_data = {}
     
     # Try multiple common table/list structures for product details
@@ -684,7 +757,7 @@ def fetch_product_details(url, existing_p, fetcher=None):
                 if th and td:
                     key = clean_text(th.get_text()).strip('\u200e :').lower()
                     val = clean_text(td.get_text(separator=' ')).strip('\u200e ')
-                    if key and val:
+                    if key and val and key not in spec_data:
                         spec_data[key] = val
                     
         # Case B: List items (bullets)
@@ -696,7 +769,7 @@ def fetch_product_details(url, existing_p, fetcher=None):
                 key = clean_text(key_text).strip(': ').lower()
                 # Use separator here too
                 val = clean_text(li.get_text(separator=' ').replace(key_text, '', 1)).strip(': ')
-                if key and val and key.lower() != val.lower():
+                if key and val and key.lower() != val.lower() and key not in spec_data:
                     spec_data[key] = val
             else:
                 text = clean_text(li.get_text(separator=' '))
@@ -705,7 +778,7 @@ def fetch_product_details(url, existing_p, fetcher=None):
                     if len(parts) == 2:
                         key = parts[0].strip().lower()
                         val = parts[1].strip()
-                        if key and val and key.lower() != val.lower():
+                        if key and val and key.lower() != val.lower() and key not in spec_data:
                             spec_data[key] = val
                     
         # Case C: Generic rows (divs)
@@ -715,10 +788,9 @@ def fetch_product_details(url, existing_p, fetcher=None):
                 parts = text.split(':', 1)
                 key = parts[0].strip().lower()
                 val = parts[1].strip()
-                if key and val and key.lower() != val.lower():
+                if key and val and key.lower() != val.lower() and key not in spec_data:
                     spec_data[key] = val
 
-    # Map discovered specs to our fields
     key_map = {
         'brand': 'Brand',
         'manufacturer': 'Manufacturer',
@@ -736,7 +808,9 @@ def fetch_product_details(url, existing_p, fetcher=None):
             # 2. Fallback to partial match
             for spec_key, spec_val in spec_data.items():
                 if k in spec_key and spec_val:
-                    p[field] = spec_val
+                    # Only map fallback if it's currently empty
+                    if not p.get(field):
+                        p[field] = spec_val
                     break
     
     # Validation: If SKU was extracted as the literal string "ASIN", drop it so the URL fallback can rescue it
@@ -772,7 +846,8 @@ def fetch_product_details(url, existing_p, fetcher=None):
             'video', '/vdp/', 'videojs', 'video-thumb',
             '.mp4', '.webm', '.mov', '.avi',
             'si-video', 'video_thumbnail', 'vt-thumb',
-            'play-button', 'playbtn',
+            'play-button', 'playbtn', 'play_icon',
+            '/vse-vms-', 'vse', 'PT0_', 'play-',
         ]
         for pat in VIDEO_PATTERNS:
             if pat in url_lower:
@@ -807,7 +882,7 @@ def fetch_product_details(url, existing_p, fetcher=None):
         url_lower = img_url.lower()
         # Block images that are clearly from recommendation/comparison widgets
         FOREIGN_PATTERNS = [
-            '/sponsored/', '/ad-', 'sims-fbt',
+            '/sponsored/', '/ad-', 'sims-fbt', 'dp-ads', '/aplus/', 'ads-center'
         ]
         for pat in FOREIGN_PATTERNS:
             if pat in url_lower:
@@ -818,34 +893,44 @@ def fetch_product_details(url, existing_p, fetcher=None):
     _is_product_gallery_image = _is_product_gallery_ancestor_safe
     
     # Strategy A: Extract from Amazon's inline JSON image dictionary (most reliable, hi-res guaranteed)
-    # HARDENED: Try multiple JSON patterns — Amazon uses different formats across regions
+    # HARDENED: Uses safe bracket-balancing to avoid regex truncating inner arrays inside the JSON block
+    def _extract_json_array(text, start_idx):
+        if text[start_idx] != '[': return None
+        depth, in_string, escape = 0, False, False
+        for i in range(start_idx, len(text)):
+            c = text[i]
+            if escape: escape = False; continue
+            if c == '\\': escape = True; continue
+            if c == '"' or c == "'": in_string = not in_string; continue
+            if not in_string:
+                if c == '[': depth += 1
+                elif c == ']':
+                    depth -= 1
+                    if depth == 0: return text[start_idx:i+1]
+        return None
+
     try:
         img_data = None
         # Pattern 1: Standard colorImages format
-        images_dict_match = re.search(r'"colorImages"\s*:\s*\{\s*"initial"\s*:\s*(\[.*?\])\s*\}', html, re.DOTALL)
-        if images_dict_match:
-            try:
-                img_data = json.loads(images_dict_match.group(1))
-            except json.JSONDecodeError:
-                pass
-        
-        # Pattern 2: Broader colorImages — non-greedy may cut off, try greedy with bracket counting
-        if not img_data:
-            match2 = re.search(r'"colorImages"\s*:\s*\{\s*"initial"\s*:\s*(\[[\s\S]*?\]\s*)\}', html)
-            if match2:
+        start_match = re.search(r'[\'"]colorImages[\'"]\s*:\s*\{\s*[\'"]initial[\'"]\s*:\s*\[', html)
+        if start_match:
+            array_str = _extract_json_array(html, start_match.end() - 1)
+            if array_str:
                 try:
-                    img_data = json.loads(match2.group(1))
-                except json.JSONDecodeError:
+                    img_data = json.loads(array_str)
+                except Exception:
                     pass
         
-        # Pattern 3: imageGalleryData format (Amazon India / newer templates)
+        # Pattern 2: imageGalleryData format
         if not img_data:
-            match3 = re.search(r'"imageGalleryData"\s*:\s*(\[.*?\])', html, re.DOTALL)
-            if match3:
-                try:
-                    img_data = json.loads(match3.group(1))
-                except json.JSONDecodeError:
-                    pass
+            start_match = re.search(r'[\'"]imageGalleryData[\'"]\s*:\s*\[', html)
+            if start_match:
+                array_str = _extract_json_array(html, start_match.end() - 1)
+                if array_str:
+                    try:
+                        img_data = json.loads(array_str)
+                    except Exception:
+                        pass
         
         if img_data:
             for item in img_data:
@@ -971,8 +1056,7 @@ def fetch_product_details(url, existing_p, fetcher=None):
         # Pre-process: normalize comma-separated numbers (1,000 -> 1000)
         normalized_text = re.sub(r'(\d),(\d{3})(?!\d)', r'\1\2', text_chunk)
         
-        # EXPANDED Regex: comma-free numbers, optional hyphen/space, full unit vocabulary
-        unit_regex = r'\b(\d+(?:\.\d+)?)\s*[-\s]?\s*(kg|kilogram|kilograms|kgs|gm|gram|grams|g|ml|millilitre|milliliter|millilitres|milliliters|mls|fl\.?\s*oz\.?|fluid\s*ounce|cc|l|litre|liter|liters|litres|oz|ounce|ounces|lb|lbs|pound|pounds)\b'
+        unit_regex = r'\b(\d+(?:\.\d+)?)\s*[-\s]?\s*(kg|kilogram|kilograms|kgs|gm|gram|grams|g|ml|millilitre|milliliter|millilitres|milliliters|mls|fl\.?\s*oz\.?|fluid\s*ounce|cc|l|litre|liter|liters|litres|ltr|ltrs|oz|ounce|ounces|lb|lbs|pound|pounds)\b'
         
         for m in re.finditer(unit_regex, normalized_text, re.I):
             amount, unit = float(m.group(1)), m.group(2).lower().strip('.')
@@ -1283,18 +1367,17 @@ def _check_delivery(html_or_soup, pincode, max_days=4):
 # ─────────────────────────────────────────────────────────────────────────────
 # SINGLE PRODUCT PROCESSOR (used by ThreadPool)
 # ─────────────────────────────────────────────────────────────────────────────
-def _process_single_product(prod, job_fetcher, log_fn, pincode='', delivery_filter=False):
-    """Process a single product: PDP fetch → delivery check → LLM sanitize. Thread-safe.
-    
-    Returns the enriched product dict or None on critical failure.
-    If delivery_filter is enabled, skips products not deliverable within 4 days.
-    GUARANTEE: Gemini LLM is ALWAYS called for every product, even if PDP fetch fails.
-    """
+def _process_single_product(prod, job_fetcher, log_fn, pincode='', delivery_filter=False, job_ref=None):
+    """Process a single product: Fast Fetch -> Gemini AI -> Output"""
+    if job_ref and job_ref.get('cancelled'):
+        return None
+
     pname = prod.get('Product Name', '')
     product_url = prod.get('_product_url')
 
     # ── PHASE 1: PDP Enrichment (may fail — that's OK) ──
     try:
+        if job_ref and job_ref.get('cancelled'): return None
         if product_url:
             log_fn(f"🔎 Deep scraping: {pname[:40]}...")
             prod = fetch_product_details(product_url, prod, fetcher=job_fetcher)
@@ -1317,11 +1400,14 @@ def _process_single_product(prod, job_fetcher, log_fn, pincode='', delivery_filt
 
     # ── PHASE 2: Compliance + Gemini LLM (ALWAYS runs, regardless of PDP success) ──
     try:
+        if job_ref and job_ref.get('cancelled'): return None
         # ── COUPANG COMPLIANCE DEEP GATE: Sanitize all text fields ──
         prod, compliance_changes = compliance_sanitize_product(prod)
         if compliance_changes:
             changed_fields = ', '.join(compliance_changes.keys())
             log_fn(f"🛡️ Compliance fix ({changed_fields}): {pname[:30]}...")
+        
+        if job_ref and job_ref.get('cancelled'): return None
         
         # Gemini LLM Sanitization and Precision Extractor — MANDATORY for every product
         log_fn(f"✨ Perfecting with Gemini: {pname[:30]}...")
@@ -1347,7 +1433,7 @@ def _process_single_product(prod, job_fetcher, log_fn, pincode='', delivery_filt
 # ─────────────────────────────────────────────────────────────────────────────
 # BACKGROUND JOB
 # ─────────────────────────────────────────────────────────────────────────────
-def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pincode='', delivery_filter=False):
+def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pincode='', delivery_filter=False, search_mode='category'):
     job = jobs[job_id]
     job['status'] = 'running'
     job['delivery_skipped'] = 0  # Track delivery filter skips
@@ -1356,9 +1442,25 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
     job['products_per_min'] = 0
     job['success_count'] = 0     # Products successfully enriched
     job['fail_count'] = 0        # Products that failed enrichment
+    job['db_saved_count'] = 0    # Products persisted to DB in real-time
+    job['already_scraped_count'] = 0  # Products skipped as DB duplicates
+    job['brand_filtered_count'] = 0   # Products removed by brand filter
+    job['total_candidates_found'] = 0 # Raw products found before filtering
+    job['pages_scraped'] = 0     # Actual search result pages fetched
+    job['finish_reason'] = ''    # Why the scrape ended (for UI messaging)
     
     # Thread-safe lock for product list mutations
     _products_lock = threading.Lock()
+
+    # ── SIGNAL HANDLING — graceful shutdown on SIGTERM/SIGINT ──
+    import signal
+    def _graceful_shutdown(signum, frame):
+        job['cancelled'] = True
+        print(f"[{job_id}] Received signal {signum}, triggering graceful shutdown...")
+    try:
+        signal.signal(signal.SIGTERM, _graceful_shutdown)
+    except (OSError, ValueError):
+        pass  # Can't set signal handler in non-main thread — that's OK
 
     def log(msg, level='info'):
         job['log'].append({'msg': msg, 'level': level})
@@ -1380,13 +1482,23 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
         log(f"🛡️ {get_compliance_summary().splitlines()[0]}")
 
         # Create ONE shared browser instance to prevent devastating OOM crashes
-        from scrapling import StealthyFetcher
-        job_fetcher = StealthyFetcher()
+        try:
+            from scrapling import StealthyFetcher
+            job_fetcher = StealthyFetcher()
+        except ImportError as imp_err:
+            job['status'] = 'error'
+            job['error'] = f'Scrapling library not installed: {imp_err}'
+            log(f'❌ {job["error"]}', 'error')
+            return
+        except Exception as fetch_init_err:
+            job['status'] = 'error'
+            job['error'] = f'Failed to initialize browser: {fetch_init_err}'
+            log(f'❌ {job["error"]}', 'error')
+            return
 
         while len(all_products) < max_products:
-            # ── CANCELLATION CHECK ──
+            # Final explicit Cancellation Check to break main loop completely
             if job.get('cancelled'):
-                log("🛑 Scrape cancelled by user.", 'warn')
                 break
 
             if current_sort_idx >= len(sort_strategies):
@@ -1398,16 +1510,33 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
             sort_label = f" (Sort: {current_sort})" if current_sort else ""
             log(f"📄 Fetching page {page}{sort_label} …")
 
-            html = fetch_with_scrapling(url, wait_sec=5, fetcher=job_fetcher)
+            if job.get('cancelled'): break
 
-            # Check for failure (None) or our custom string error ("ERROR: ...")
+            # ── PAGE FETCH WITH RETRY (up to 3 attempts with backoff) ──
+            html = None
+            page_fetch_attempts = 3
+            for _attempt in range(page_fetch_attempts):
+                if job.get('cancelled'): break
+                html = fetch_with_scrapling(url, wait_sec=5, fetcher=job_fetcher)
+                if html and not (isinstance(html, str) and html.startswith("ERROR:")):
+                    break  # Success
+                if _attempt < page_fetch_attempts - 1:
+                    wait_time = (2 ** _attempt) + random.uniform(0.5, 1.5)
+                    log(f"⚠️ Page fetch attempt {_attempt + 1} failed, retrying in {wait_time:.1f}s...", 'warn')
+                    time.sleep(wait_time)
+                    html = None  # Reset for next attempt
+
+            # Check for failure after all retries
             if not html or (isinstance(html, str) and html.startswith("ERROR:")):
-                # Extract specific error text if it failed
                 specific_err = html if html else "Unknown error occurred"
-                msg = (f"Scrape Failed.\nDetailed Error: {specific_err}\n"
+                msg = (f"Scrape Failed after {page_fetch_attempts} retries.\nDetailed Error: {specific_err}\n"
                        "This usually means the site is blocking access from this IP or Playwright crashed.")
                 log(f"❌ {msg}", 'error')
-                job['status'] = 'error'; job['error'] = msg; return
+                if len(all_products) > 0:
+                    log(f"⚠️ Rescuing {len(all_products)} products before server crash...", 'warn')
+                    break  # Trigger save
+                else:
+                    job['status'] = 'error'; job['error'] = msg; return
 
             soup = BeautifulSoup(html, 'lxml')
             
@@ -1457,17 +1586,17 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                 if any(w in text_low for w in ['captcha','robot','verify','are you human']):
                     msg = "Site is showing a CAPTCHA. Try again later or from a different network."
                     log(f"⚠️ {msg}", 'warn')
-                    job['status'] = 'error'; job['error'] = msg; return
+                    if len(all_products) > 0: break
+                    else: job['status'] = 'error'; job['error'] = msg; return
                 elif any(w in text_low for w in ['sign in','log in','login']):
                     msg = "Site requires you to log in before showing products."
                     log(f"⚠️ {msg}", 'warn')
-                    job['status'] = 'error'; job['error'] = msg; return
+                    if len(all_products) > 0: break
+                    else: job['status'] = 'error'; job['error'] = msg; return
                 elif page == 1 and current_sort_idx == 0:
-                    msg = ("No products detected on page 1.\n"
-                           "Possible reasons: keyword has no results, site structure changed,\n"
-                           "or the site needs a different URL format.")
+                    msg = "No products detected on page 1 matching your structure or keywords."
                     log(f"⚠️ {msg}", 'warn')
-                    job['status'] = 'error'; job['error'] = msg; return
+                    break  # Gracefully exit to trigger the No Products state
                 else:
                     log(f"ℹ️ Reached end of available products. Only {len(all_products)} found in total. Stopping search.", 'warn')
                     break
@@ -1475,6 +1604,37 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
             # ── Filter duplicates BEFORE expensive PDP/LLM processing ──
             candidates = []
             skipped = 0
+            brand_skipped_page = 0
+            db_skipped_page = 0
+            
+            # Track raw product count before any filtering
+            job['total_candidates_found'] = job.get('total_candidates_found', 0) + len(products)
+            
+            # ── STRICT BRAND FILTER (Name-Start-Only) ──
+            # ONLY accept products where the product name BEGINS with the keyword.
+            # Do NOT accept brand-field-only matches — those let random products through
+            # because the brand field often falls back to the first word of the name.
+            if search_mode == 'brand':
+                kw_lower = keyword.lower().strip()
+                kw_words = kw_lower.split()
+                valid_prods = []
+                for prod in products:
+                    name_lower = str(prod.get('Product Name', '')).lower().strip()
+                    
+                    # Product name must START with the brand keyword
+                    # Uses startswith directly to handle names that have punctuation attached
+                    # e.g., kw="The Brand", name="The Brand-Something"
+                    match_name = name_lower.startswith(kw_lower)
+                    
+                    if match_name:
+                        valid_prods.append(prod)
+                    else:
+                        brand_skipped_page += 1
+                        skipped += 1
+                job['brand_filtered_count'] = job.get('brand_filtered_count', 0) + brand_skipped_page
+                if brand_skipped_page > 0:
+                    log(f"🏷️ Brand filter: kept {len(valid_prods)}, rejected {brand_skipped_page} (name must start with '{keyword}')")
+                products = valid_prods
             
             # ── Supabase Bulk Optimization (Reads page once instead of row-by-row) ──
             page_skus = []
@@ -1503,13 +1663,15 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
 
                 # ── Duplicate Prevention (SKU-based, then product-name fallback) ──
                 if sku and (sku in scraped_skus_bulk or sku in seen_skus):
-                    log(f"⏭️ Skipping bulk duplicate (SKU: {sku})")
+                    log(f"⏭️ Skipping already-scraped (SKU: {sku})")
+                    db_skipped_page += 1
                     skipped += 1
                     continue
                 
                 # Fallback: check by product name for non-Amazon sites without SKUs
                 if not sku and pname and pname.lower().strip() in scraped_names_bulk:
-                    log(f"⏭️ Skipping bulk duplicate: {pname[:40]}...")
+                    log(f"⏭️ Skipping already-scraped: {pname[:40]}...")
+                    db_skipped_page += 1
                     skipped += 1
                     continue
                 
@@ -1517,6 +1679,8 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                     seen_skus.add(sku)
 
                 candidates.append(prod)
+            
+            job['already_scraped_count'] = job.get('already_scraped_count', 0) + db_skipped_page
 
             # ── CONCURRENT PRODUCT PROCESSING ──────────────────────────
             added = 0
@@ -1525,7 +1689,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                 
                 with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_PRODUCTS) as pool:
                     futures = {
-                        pool.submit(_process_single_product, prod, job_fetcher, log, pincode, delivery_filter): prod
+                        pool.submit(_process_single_product, prod, job_fetcher, log, pincode, delivery_filter, job): prod
                         for prod in candidates
                     }
                     
@@ -1539,7 +1703,8 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                                 job['delivery_skipped'] = job.get('delivery_skipped', 0) + 1
                                 continue
                             if enriched:
-                                enriched['Product URL'] = enriched.pop('_product_url', None)
+                                # Fix: default to '' instead of None for Product URL
+                                enriched['Product URL'] = enriched.pop('_product_url', '') or ''
                                 enriched.pop('_raw_specs', None)
                                 
                                 # Clean up internal compliance metadata (not exported to Excel)
@@ -1547,13 +1712,14 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                                 if compliance_notes:
                                     job['compliance_fixed'] = job.get('compliance_fixed', 0) + 1
                                 
-                                # Thread-safe product list mutation
+                                # Thread-safe product list mutation & job state update
                                 with _products_lock:
                                     all_products.append(enriched)
                                     product_count = len(all_products)
+                                    # Update job products inside lock to prevent partial reads
+                                    job['products'] = list(all_products)
                                 
-                                # Update job state (atomic assignments are thread-safe in CPython)
-                                job['products'] = list(all_products)
+                                # Update job stats (atomic assignments are thread-safe in CPython)
                                 elapsed = time.time() - start_time
                                 avg_time = elapsed / product_count
                                 rem = max_products - product_count
@@ -1561,7 +1727,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                                 job['elapsed_seconds'] = int(elapsed)
                                 job['products_per_min'] = round(product_count / (elapsed / 60), 1) if elapsed > 0 else 0
                                 job['success_count'] = job.get('success_count', 0) + 1
-                                # [MODIFIED] Bulk DB save logic was moved to the very end.
+                                
                                 
                                 added += 1
                         except Exception as fut_err:
@@ -1569,9 +1735,12 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                             log(f"⚠️ Product processing failed: {fut_err}", 'warn')
 
             delivery_skip_msg = f", 🚚{delivery_skipped_page} delivery-filtered" if delivery_filter and delivery_skipped_page > 0 else ''
-            log(f"✅ Page {page}: +{added} new, ⏭️{skipped} skipped{delivery_skip_msg}  (total {len(all_products)}/{max_products})", 'success')
+            db_skip_msg = f", 💽{db_skipped_page} already-scraped" if db_skipped_page > 0 else ''
+            brand_skip_msg = f", 🏷️{brand_skipped_page} brand-mismatch" if brand_skipped_page > 0 else ''
+            log(f"✅ Page {page}: +{added} new, ⏭️{skipped} skipped{db_skip_msg}{brand_skip_msg}{delivery_skip_msg}  (total {len(all_products)}/{max_products})", 'success')
             job['progress'] = int(min(len(all_products) / max_products * 85, 85))
             job['found']    = len(all_products)
+            job['pages_scraped'] = page
 
             # Stop ONLY if the page was truly empty (no products found at all)
             # Do NOT stop if products were found but all were duplicates — move to next page!
@@ -1590,9 +1759,35 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                 job['progress'] = 100
                 job['total'] = 0
                 job['products'] = []
+                job['finish_reason'] = 'cancelled_empty'
                 log("🛑 Scrape cancelled. No products were collected.", 'warn')
                 return
-            job['status'] = 'error'; job['error'] = "No products were scraped."; return
+            
+            # ── DETERMINE FINISH REASON for smart UI feedback ──
+            total_found = job.get('total_candidates_found', 0)
+            brand_filtered = job.get('brand_filtered_count', 0)
+            already_scraped = job.get('already_scraped_count', 0)
+            
+            if total_found == 0:
+                job['finish_reason'] = 'no_products_on_site'
+                job['status'] = 'done'; job['progress'] = 100; job['total'] = 0; job['products'] = []
+                log("📭 No products found on Amazon for this keyword.", 'warn')
+            elif search_mode == 'brand' and brand_filtered > 0 and already_scraped == 0:
+                job['finish_reason'] = 'brand_mismatch'
+                job['status'] = 'done'; job['progress'] = 100; job['total'] = 0; job['products'] = []
+                log(f"🏷️ Found {total_found} products, but none matched brand '{keyword}'.", 'warn')
+            elif already_scraped > 0 and brand_filtered == 0:
+                job['finish_reason'] = 'all_already_scraped'
+                job['status'] = 'done'; job['progress'] = 100; job['total'] = 0; job['products'] = []
+                log(f"💽 All {already_scraped} matching products were already scraped. Nothing new.", 'warn')
+            elif already_scraped > 0 and brand_filtered > 0:
+                job['finish_reason'] = 'mixed_already_scraped_and_brand'
+                job['status'] = 'done'; job['progress'] = 100; job['total'] = 0; job['products'] = []
+                log(f"💽🏷️ {already_scraped} already scraped + {brand_filtered} brand mismatch. No new products.", 'warn')
+            else:
+                job['finish_reason'] = 'no_products_on_site'
+                job['status'] = 'error'; job['error'] = "No products were scraped."
+            return
 
         # ── ABSOLUTE FINAL GATE — word-level hard scan ──────────────────────────
         from .coupang_compliance import _MASTER_REPLACEMENTS, _USER_REPLACEMENTS
@@ -1621,9 +1816,6 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
             clean_products.append(_prod)
         all_products = clean_products
         
-        # ── BULK DB SAVE AT VERY END ──────────────────────────
-        log(f"💽 Saving {len(all_products)} products to Database...")
-        db.save_products_bulk(all_products)
 
         log(f"📊 Building Excel for {len(all_products)} products …")
         job['progress'] = 90
@@ -1633,6 +1825,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
         else:
             log(f"✅ Excel saved → {os.path.basename(fp)}", 'success')
 
+        job['finish_reason'] = 'success'
         job.update({'status':'done','progress':100,'filepath':fp,'total':len(all_products),'products':all_products})
 
     except Exception as e:
@@ -1646,8 +1839,8 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
         if 'all_products' in locals() and all_products:
             log(f"⚠️ Interrupted! Attempting to rescue {len(all_products)} collected products...", 'warn')
             try:
-                # Do a bulk save of the surviving products
-                db.save_products_bulk(all_products)
+                # [MODIFIED] DB save removed — user triggers via Download button
+                # Build Excel for emergency download
                 fp = build_excel(all_products, keyword, base_url, outputs_dir, partial=True)
                 job.update({'filepath': fp, 'total': len(all_products), 'products': all_products})
                 log(f"✅ Emergency save successful: {os.path.basename(fp)} saved.", 'success')

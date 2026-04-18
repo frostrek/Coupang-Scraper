@@ -6,6 +6,15 @@ from dotenv import load_dotenv
 load_dotenv()
 db_url = os.environ.get("DATABASE_URL")
 
+
+def is_db_available() -> bool:
+    """Quick check if DB is configured and reachable. Never crashes."""
+    try:
+        conn = get_db_connection()
+        return conn is not None
+    except Exception:
+        return False
+
 # ─────────────────────────────────────────────────────────────────────────────
 # THREAD-SAFE CONNECTION POOLING — one connection per thread, auto-reconnect
 # ─────────────────────────────────────────────────────────────────────────────
@@ -145,6 +154,10 @@ def save_product_to_db(prod: dict):
         return True
     except Exception as e:
         print(f"[Supabase DB] ❌ Error inserting SKU '{sku}': {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
         _local.conn = None
         return False
 
@@ -196,5 +209,9 @@ def save_products_bulk(products: list):
         return True
     except Exception as e:
         print(f"[Supabase DB] ❌ Error in bulk insert: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
         _local.conn = None
         return False
