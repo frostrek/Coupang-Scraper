@@ -1,15 +1,14 @@
-# High-Performance Amazon & E-commerce Scraper
+# High-Performance E-commerce Scraper
 
 A production-grade, highly concurrent e-commerce scraping system designed to extract, normalize, and enrich product data using **Scrapling**, **Patchright**, and **Google Gemini AI**. 
 
-Specifically hardened for Amazon (India/US) to achieve 100% data accuracy through PDP-level authority and AI-driven data sanitization.
+Specifically hardened for both Amazon and Coupang to achieve 100% compliance sanitization and data accuracy through extremely robust PDP-level authority and AI-driven data processing.
 
 ## 🌟 Key Features
 - **PDP-First Authority**: PDP (Product Detail Page) data strictly overrides search-level data to eliminate "phantom" prices or generic thumbnails.
 - **AI-Powered Normalization**: Utilizes Gemini 2.0 Flash to standardize weights/volumes, enforce description word counts, and classify categories.
 - **Anti-Blocking Stealth**: Uses `Scrapling` and `curl_cffi` to bypass TLS fingerprinting and bypass CAPTCHAs via advanced header rotation.
-- **Metric Exclusivity**: Forces a strict choice between Weight (g/kg) and Volume (ml/L) to prevent contradictory Excel data.
-- **Image Intelligence**: Automatically bypasses Amazon's lazy-load transparent GIF placeholders to capture high-resolution product imagery.
+- **Image Intelligence**: Automatically bypasses lazy-load transparent GIF placeholders to capture high-resolution product imagery.
 
 ## 📦 Prerequisites
 - **Python 3.10+**
@@ -38,9 +37,12 @@ Specifically hardened for Amazon (India/US) to achieve 100% data accuracy throug
    pip install -r requirements.txt
    ```
 
-4. **Install Browsers (CRITICAL)**:
+4. **Install Browsers & OS Dependencies (CRITICAL)**:
    ```bash
    playwright install chromium
+   
+   # If deploying on Linux (like AWS EC2), you must also install OS libraries:
+   sudo npx playwright install-deps
    ```
 
 ## ⚙️ Configuration
@@ -54,7 +56,7 @@ GEMINI_API_KEY="your_api_key_here"
 # Database Configuration (Optional - set to empty string to skip)
 DATABASE_URL="postgresql://postgres:[password]@db.supabase.com:5432/postgres"
 
-# Concurrency Control (Default: 2-5 for free tier hosting)
+# ncy Control (Default: 2-5 for free tier hosting)
 MAX_CONCURRENT_SCRAPES=2
 ```
 
@@ -66,14 +68,13 @@ python run.py
 ```
 
 - Access the Dashboard at `http://127.0.0.1:5055`
-- Paste an Amazon Search URL (e.g., `https://www.amazon.in/s?k=protein+powder`)
+- Paste a Search URL (e.g., `https://www.amazon.in/s?k=cream` or target site structure)
 - Set the limit and click **Scrape**.
 - Downloads will appear in the `outputs/` folder.
 
 ## ☁️ Deployment
-For detailed instructions on deploying to AWS or Render, see:
+For detailed instructions on deploying to AWS EC2, see:
 - [AWS EC2 Deployment Guide](AWS_EC2_DEPLOYMENT.md)
-- [Render Deployment Guide](RENDER_DEPLOYMENT.md)
 
 ## 📊 Data Mapping Rules
 - **Sale Price**: The current price the customer pays.

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 db_url = os.environ.get("DATABASE_URL")
-
+#testing
 def run_migration():
     if not db_url or "YOUR-PASSWORD" in db_url:
         print("[Migration Error] DATABASE_URL is missing or lacks a real password.")

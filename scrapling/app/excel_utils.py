@@ -34,6 +34,7 @@ CSV_TEMPLATE_COLUMNS = [
     'Additional Image 2',
     'Additional Image 3',
     'Additional Image 4',
+    'Additional Image 5',
     'Product URL',
 ]
 
@@ -64,14 +65,26 @@ COLUMN_WIDTHS = {
     'Additional Image 2': 50,
     'Additional Image 3': 50,
     'Additional Image 4': 50,
+    'Additional Image 5': 50,
     'Product URL': 45,
 }
 
 # URL columns that should be styled as links
-URL_COLUMNS = {'Main Image', 'Additional Image 1', 'Additional Image 2', 'Additional Image 3', 'Additional Image 4', 'Product URL'}
+URL_COLUMNS = {'Main Image', 'Additional Image 1', 'Additional Image 2', 'Additional Image 3', 'Additional Image 4', 'Additional Image 5', 'Product URL'}
 
-def build_excel(products, keyword, base_url, outputs_dir):
-    """Build formatted Excel workbook from scraped product data."""
+def build_excel(products, keyword, base_url, outputs_dir, partial=False):
+    """Build formatted Excel workbook from scraped product data.
+    
+    Args:
+        products: List of product dicts to export
+        keyword: Search keyword used for scraping
+        base_url: Base URL of the e-commerce site
+        outputs_dir: Directory to save the Excel file
+        partial: If True, marks the file as a partial/in-progress export
+    """
+    if not products:
+        return None
+        
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Products"
@@ -102,12 +115,11 @@ def build_excel(products, keyword, base_url, outputs_dir):
 
     # Write data rows
     for ri, prod in enumerate(products, 2):
-        fill = norm_fill
         ws.row_dimensions[ri].height = 20
         for ci, k in enumerate(all_keys, 1):
             val = prod.get(k, '')
             cell = ws.cell(row=ri, column=ci, value=val)
-            cell.fill = fill
+            cell.fill = norm_fill
             cell.border = cell_border
             cell.alignment = Alignment(vertical="center")
             # Style URL columns as links
@@ -129,6 +141,7 @@ def build_excel(products, keyword, base_url, outputs_dir):
     # Calculate statistics using correct field names
     summary_rows = [
         ("Scrape Summary", ""),
+        ("Status", "PARTIAL — scraping still in progress" if partial else "COMPLETE"),
         ("Website", base_url),
         ("Keyword", keyword),
         ("Total Products", len(products)),
@@ -149,6 +162,9 @@ def build_excel(products, keyword, base_url, outputs_dir):
         if ri == 1:
             cell_a.font = Font(bold=True, size=13, color="FFFFFF", name="Calibri")
             cell_a.fill = PatternFill("solid", fgColor="1A1A2E")
+        elif ri == 2 and partial:
+            cell_a.font = Font(bold=True, size=11, name="Calibri")
+            cell_b.font = Font(bold=True, size=11, name="Calibri", color="E67E22")
         else:
             cell_a.font = Font(bold=True, size=11, name="Calibri")
             cell_b.font = Font(size=11, name="Calibri")
@@ -156,6 +172,7 @@ def build_excel(products, keyword, base_url, outputs_dir):
     # Generate output filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_keyword = re.sub(r'[^\w]', '_', keyword)[:20]
-    filepath = os.path.join(outputs_dir, f"scrape_{safe_keyword}_{timestamp}.xlsx")
+    partial_tag = "_PARTIAL" if partial else ""
+    filepath = os.path.join(outputs_dir, f"scrape_{safe_keyword}_{timestamp}{partial_tag}.xlsx")
     wb.save(filepath)
     return filepath
