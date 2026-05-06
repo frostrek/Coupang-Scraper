@@ -443,6 +443,71 @@
   }
   .btn-danger-outline:disabled { opacity: 0.55; cursor: not-allowed; }
 
+  /* ─── DELETE MODAL ─── */
+  .modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.55); backdrop-filter: blur(4px);
+    z-index: 10000; display: flex; align-items: center; justify-content: center;
+    opacity: 0; pointer-events: none; transition: opacity 0.25s;
+  }
+  .modal-overlay.open { opacity: 1; pointer-events: auto; }
+  .modal-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 32px;
+    width: min(560px, 92vw); max-height: 80vh;
+    display: flex; flex-direction: column; gap: 18px;
+    box-shadow: var(--shadow-xl);
+    transform: translateY(16px); transition: transform 0.25s;
+  }
+  .modal-overlay.open .modal-box { transform: translateY(0); }
+  .modal-title {
+    font-size: 17px; font-weight: 700; color: var(--error);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .modal-subtitle {
+    font-size: 13px; color: var(--text2); line-height: 1.6;
+  }
+  .modal-product-list {
+    overflow-y: auto; max-height: 280px;
+    border: 1px solid var(--border); border-radius: var(--radius-sm);
+    background: var(--surface2);
+  }
+  .modal-product-list::-webkit-scrollbar { width: 4px; }
+  .modal-product-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+  .modal-product-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .modal-product-row:last-child { border-bottom: none; }
+  .modal-product-row .mprod-num {
+    font-family: 'JetBrains Mono', monospace; color: var(--text4);
+    font-size: 11px; min-width: 22px;
+  }
+  .modal-product-row .mprod-name { flex: 1; color: var(--text); font-weight: 500; }
+  .modal-product-row .mprod-brand { color: var(--text3); min-width: 80px; text-align: right; }
+  .modal-product-row .mprod-sku {
+    font-family: 'JetBrains Mono', monospace; color: var(--text4);
+    font-size: 10px; min-width: 100px; text-align: right;
+  }
+  .modal-footer { display: flex; gap: 10px; justify-content: flex-end; }
+  .btn-modal-cancel {
+    background: var(--surface2); color: var(--text2);
+    border: 1px solid var(--border); border-radius: var(--radius-xs);
+    padding: 10px 20px; font-family: 'Inter',sans-serif;
+    font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.15s;
+  }
+  .btn-modal-cancel:hover { background: var(--border); }
+  .btn-modal-delete {
+    background: var(--error); color: #fff;
+    border: none; border-radius: var(--radius-xs);
+    padding: 10px 24px; font-family: 'Inter',sans-serif;
+    font-weight: 600; font-size: 13px; cursor: pointer; transition: all 0.15s;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .btn-modal-delete:hover { background: #DC2626; }
+  .btn-modal-delete:disabled { opacity: 0.6; cursor: not-allowed; }
+
   .btn-success-outline {
     background: transparent;
     color: var(--success);
@@ -1000,7 +1065,7 @@
       <p>E-commerce product scraper & exporter</p>
     </div>
     <div class="header-right">
-      <button class="theme-toggle-btn" id="clear-data-btn" onclick="clearAllData()" title="Clear Cached Data" style="background:var(--error-bg);border-color:var(--error-border);color:var(--error);">
+      <button class="theme-toggle-btn" id="delete-db-btn" onclick="openDeleteModal()" title="Delete current job's products from database" style="background:var(--error-bg);border-color:var(--error-border);color:var(--error); opacity:0.35; cursor:not-allowed;" disabled>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
       </button>
       <button class="theme-toggle-btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">
@@ -1286,6 +1351,29 @@
 
 <!-- Toast Container -->
 <div id="toast-container"></div>
+
+<!-- ── DELETE CONFIRMATION MODAL ── -->
+<div class="modal-overlay" id="delete-modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+  <div class="modal-box">
+    <div class="modal-title">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      <span id="delete-modal-title">Delete Products from Database</span>
+    </div>
+    <div class="modal-subtitle" id="delete-modal-subtitle">
+      The following products were saved to the database when you clicked Download.
+      If the Excel file failed to download or you need to re-scrape them, you can
+      remove them now — they will no longer be skipped on future scrapes.
+    </div>
+    <div class="modal-product-list" id="delete-modal-list"></div>
+    <div class="modal-footer">
+      <button class="btn-modal-cancel" id="delete-modal-cancel" onclick="closeDeleteModal()">Cancel</button>
+      <button class="btn-modal-delete" id="delete-modal-confirm" onclick="confirmDeleteProducts()">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+        Delete from Database
+      </button>
+    </div>
+  </div>
+</div>
 
 <script>
 let currentJobId = null;
@@ -1816,36 +1904,134 @@ function scrollTableTop() { document.getElementById('table-scroll').scrollTop = 
 function truncate(s, len) { return !s ? '' : s.length > len ? s.substring(0, len) + '…' : s; }
 function escHtml(s) { if (!s) return ''; const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+// Track whether the current job's products have been saved to DB
+let _jobDbSaved = false;
+
+function _enableDeleteBtn() {
+  const btn = document.getElementById('delete-db-btn');
+  if (!btn) return;
+  btn.disabled = false;
+  btn.style.opacity = '1';
+  btn.style.cursor = 'pointer';
+  btn.title = "Delete current job's products from database";
+}
+function _disableDeleteBtn() {
+  const btn = document.getElementById('delete-db-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.style.opacity = '0.35';
+  btn.style.cursor = 'not-allowed';
+  btn.title = 'Download first to save products to database';
+}
+
 async function downloadFile() {
   if (!currentJobId) return;
   const btn = document.getElementById('download-btn');
   const rescueBtn = document.getElementById('rescue-download-btn');
   const activeBtn = btn || rescueBtn;
-  if (activeBtn) activeBtn.innerHTML = '<div class="spinner" style="border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Saving & Downloading...';
-  
-  // Step 1: Save to DB (on-demand, only on download click)
+  if (activeBtn) activeBtn.innerHTML = '<div class="spinner" style="border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Saving &amp; Downloading...';
+
+  // Step 1: Save to DB (always happens before download)
   try {
     const dbRes = await fetch(`/api/save-to-db/${currentJobId}`, { method: 'POST' });
     const dbData = await dbRes.json();
-    if (dbData.count > 0) {
-      showToast(`💽 ${dbData.count} products saved to database`, 'success');
+    if (dbData.success) {
+      _jobDbSaved = true;
+      _enableDeleteBtn();
+      if (dbData.count > 0) showToast(`${dbData.count} products saved to database`, 'success');
     }
   } catch (e) {
     console.warn('DB save skipped:', e);
   }
-  
+
   // Step 2: Trigger file download
   window.location.href = `/api/download/${currentJobId}`;
   showToast('Download started', 'success');
-  
-  // Clear localStorage after successful download
-  localStorage.removeItem('scrapling_currentJobId');
-  
+
   setTimeout(() => {
     if (btn) btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Excel';
     if (rescueBtn) rescueBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download Rescued Data';
   }, 2000);
 }
+
+// ── DELETE MODAL ─────────────────────────────────────────────────────────────
+function openDeleteModal() {
+  if (!currentJobId || !_jobDbSaved) {
+    showToast('Download the file first — products must be saved to DB before they can be deleted.', 'info');
+    return;
+  }
+  if (!allProducts || allProducts.length === 0) {
+    showToast('No products found for this job.', 'info');
+    return;
+  }
+
+  const list = document.getElementById('delete-modal-list');
+  list.innerHTML = '';
+  const shown = allProducts.slice(0, 30);
+  const extra = allProducts.length - shown.length;
+  shown.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'modal-product-row';
+    row.innerHTML =
+      `<span class="mprod-num">${i + 1}</span>` +
+      `<span class="mprod-name">${escHtml(truncate(p['Product Name'] || 'Unnamed', 50))}</span>` +
+      `<span class="mprod-brand">${escHtml(p['Brand'] || '\u2014')}</span>` +
+      `<span class="mprod-sku">${escHtml(p['SKU'] || '\u2014')}</span>`;
+    list.appendChild(row);
+  });
+  if (extra > 0) {
+    const more = document.createElement('div');
+    more.className = 'modal-product-row';
+    more.style.cssText = 'color:var(--text4);justify-content:center;font-style:italic;';
+    more.textContent = `\u2026and ${extra} more product${extra === 1 ? '' : 's'}`;
+    list.appendChild(more);
+  }
+
+  document.getElementById('delete-modal-subtitle').innerHTML =
+    `<strong style="color:var(--error)">${allProducts.length} product${allProducts.length === 1 ? '' : 's'}</strong> from this job are saved in the database.<br>` +
+    `Deleting them means they <strong>will not be skipped</strong> on the next scrape.<br>` +
+    `This only removes them from the database \u2014 your downloaded Excel file is unaffected.`;
+
+  const confirmBtn = document.getElementById('delete-modal-confirm');
+  confirmBtn.disabled = false;
+  confirmBtn.innerHTML =
+    `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>` +
+    ` Yes, Delete ${allProducts.length} Product${allProducts.length === 1 ? '' : 's'} from DB`;
+
+  document.getElementById('delete-modal').classList.add('open');
+}
+
+function closeDeleteModal() {
+  document.getElementById('delete-modal').classList.remove('open');
+}
+
+async function confirmDeleteProducts() {
+  if (!currentJobId) return;
+  const confirmBtn = document.getElementById('delete-modal-confirm');
+  confirmBtn.disabled = true;
+  confirmBtn.innerHTML = '<div class="spinner" style="width:13px;height:13px;border-width:2px;"></div> Deleting...';
+
+  try {
+    const res = await fetch(`/api/delete-job-products/${currentJobId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    });
+    const data = await res.json();
+    closeDeleteModal();
+    if (data.error) { showToast(`Delete failed: ${data.error}`, 'error'); return; }
+    _jobDbSaved = false;
+    _disableDeleteBtn();
+    showToast(`Deleted ${data.deleted} product${data.deleted === 1 ? '' : 's'} from DB \u2014 they will be scraped fresh next time.`, 'success');
+  } catch (e) {
+    closeDeleteModal();
+    showToast('Network error during delete. Please try again.', 'error');
+  }
+}
+
+// Close modal on overlay click or Escape key
+document.addEventListener('click', (e) => { const m = document.getElementById('delete-modal'); if (m && e.target === m) closeDeleteModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDeleteModal(); });
 
 function downloadPartial() {
   if (!currentJobId) return;
@@ -1900,18 +2086,20 @@ function resetApp() {
 }
 
 function clearAllData() {
-  if (!confirm('Clear all cached data and reset the app? This will stop any active scraping.')) return;
+  // This function is no longer bound to the header trash icon.
+  // Kept for any legacy references.
   clearInterval(pollInterval);
   localStorage.removeItem('scrapling_currentJobId');
-  localStorage.removeItem('theme'); // Keep theme? No — user asked for full cleanup
   currentJobId = null;
+  _jobDbSaved = false;
+  _disableDeleteBtn();
   allProducts = []; filteredProducts = []; logCache = []; livePollCount = 0; pollFailCount = 0;
   hide('result-section'); hide('error-section'); hide('progress-section'); hide('data-section'); hide('no-products-section');
   document.getElementById('main-wrap').style.display = 'block';
   document.getElementById('rescue-download-section').style.display = 'none';
   document.getElementById('log-box').innerHTML = '';
   resetBtn();
-  showToast('All cached data cleared successfully', 'success');
+  showToast('Session cleared', 'success');
 }
 
 function resetBtn() {

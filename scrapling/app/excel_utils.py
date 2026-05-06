@@ -35,6 +35,10 @@ CSV_TEMPLATE_COLUMNS = [
     'Additional Image 3',
     'Additional Image 4',
     'Additional Image 5',
+    'Option Type 1',
+    'Option Value 1',
+    'Option Type 2',
+    'Option Value 2',
     'Product URL',
 ]
 
@@ -66,6 +70,10 @@ COLUMN_WIDTHS = {
     'Additional Image 3': 50,
     'Additional Image 4': 50,
     'Additional Image 5': 50,
+    'Option Type 1': 16,
+    'Option Value 1': 22,
+    'Option Type 2': 16,
+    'Option Value 2': 22,
     'Product URL': 45,
 }
 

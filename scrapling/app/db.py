@@ -205,13 +205,50 @@ def save_products_bulk(products: list):
                 }
                 cur.execute(sql, payload)
                 inserted_count += 1
-            print(f"[Supabase DB] ✅ Stored {inserted_count} products in bulk.")
+            print(f"[Supabase DB] Stored {inserted_count} products in bulk.")
         return True
     except Exception as e:
-        print(f"[Supabase DB] ❌ Error in bulk insert: {e}")
+        print(f"[Supabase DB] Error in bulk insert: {e}")
         try:
             conn.close()
         except Exception:
             pass
         _local.conn = None
         return False
+
+
+def delete_products_by_skus(sku_list: list) -> tuple:
+    """Delete products from the DB by a list of SKUs.
+
+    Returns (deleted_count: int, error: str | None).
+    deleted_count is the number of rows actually removed.
+    error is None on success, or an error message string on failure.
+    """
+    conn = get_db_connection()
+    if not conn:
+        return 0, "Database not configured or unreachable"
+    if not sku_list:
+        return 0, None
+
+    valid_skus = [s for s in sku_list if s and isinstance(s, str)]
+    if not valid_skus:
+        return 0, None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM products WHERE sku = ANY(%s)",
+                (valid_skus,)
+            )
+            deleted = cur.rowcount
+        print(f"[Supabase DB] Deleted {deleted} products by SKU list.")
+        return deleted, None
+    except Exception as e:
+        print(f"[Supabase DB] Error deleting products: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
+        return 0, str(e)
+

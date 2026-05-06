@@ -102,7 +102,7 @@ def fetch_with_scrapling(url, wait_sec=3, fetcher=None):
         if response.status != 200:
             print(f"[Scrapling] Non-200 status code: {response.status}")
         
-        return response.body
+        return response.body.decode('utf-8', errors='ignore')
     except Exception as e:
         err_msg = str(e)
         print(f"[Scrapling] Error: {err_msg}")
@@ -275,8 +275,13 @@ def extract_single_product(c, base_url):
         'Additional Image 3': '',
         'Additional Image 4': '',
         'Additional Image 5': '',
+        'Option Type 1': '',
+        'Option Value 1': '',
+        'Option Type 2': '',
+        'Option Value 2': '',
         '_product_url': '',  # Internal use only, not exported
     }
+
 
     # Extract SKU early from Amazon's data-asin attribute (most reliable source)
     data_asin = c.get('data-asin', '').strip()
@@ -409,10 +414,15 @@ def _safe_upgrade_image_url(url: str) -> str:
     
     return original  # Upgrade broke something — keep the original
 
-def fetch_product_details(url, existing_p, fetcher=None):
+def fetch_product_details(url, existing_p, fetcher=None, return_html=False, fast_only=False):
     """Visits the Product Detail Page (PDP) to extract deep information.
-    
+
     Includes dedicated price extraction from PDP for higher accuracy than SERP.
+
+    If return_html=True, returns (product_dict, html_str) so callers can reuse
+    the already-fetched HTML for variant extraction without a second HTTP trip.
+    If the product is unavailable the html is still returned so the caller can
+    distinguish "page fetched but product dead" from "fetch failed entirely".
     """
     # Try the 10x faster HTTP-only fetcher first to avoid IP blocks and headless overhead
     html = fetch_pdp_fast(url)
@@ -434,11 +444,11 @@ def fetch_product_details(url, existing_p, fetcher=None):
             html = None  # Not a real product page
     
     # Fallback to Playwright if fast fetch got nothing useful
-    if not html:
+    if not html and not fast_only:
         html = fetch_with_scrapling(url, wait_sec=0, fetcher=fetcher)
 
     if not html or isinstance(html, str) and html.startswith("ERROR:"):
-        return existing_p
+        return (existing_p, None) if return_html else existing_p
     
     # Preserve the SERP main image in case PDP extraction overwrites it with empty
     serp_main_image = existing_p.get('Main Image', '')
@@ -465,16 +475,16 @@ def fetch_product_details(url, existing_p, fetcher=None):
             'item is not available'
         ]
         if any(term in avail_text for term in unavailability_markers):
-            return None  # Product is dead or unavailable, abort scraping
+            return (None, html) if return_html else None  # Product is dead or unavailable, abort scraping
     
     # 2. Page-level broad check for "No featured offers available" widget
     # STRICTER OUT-OF-STOCK CHECK
     for el in soup.select('#buybox, #desktop_buybox, #rightCol, #availability, #deliveryBlockMessage'):
         txt = el.get_text().lower()
         if 'no featured offers available' in txt or 'currently unavailable' in txt or 'out of stock' in txt:
-            return None # Strict unavailability indicator
+            return (None, html) if return_html else None  # Strict unavailability indicator
         if 'see all buying options' in txt and 'add to cart' not in txt:
-            return None # No direct buy box available
+            return (None, html) if return_html else None  # No direct buy box available
     # ─────────────────────────────────────────────────────────────────────
     #  PDP MAIN IMAGE UPGRADE — Get the hero/landing image at full resolution
     #  HARDENED: Rejects images from review/recommendation/carousel ancestors
@@ -667,13 +677,24 @@ def fetch_product_details(url, existing_p, fetcher=None):
     # Sort descending (highest price first, lowest price last)
     unique_prices.sort(key=lambda x: x[0], reverse=True)
 
+    # ── UNIT-PRICE GUARD ────────────────────────────────────────────────────
+    # Amazon sometimes shows "₹658" alongside "₹11.74 /ml" (unit price).
+    # The junk-filter above catches most of these, but not all.  As a last
+    # line of defence: drop any price that is < 5 % of the highest price —
+    # a real discounted price is never less than 5 % of MRP.
+    if unique_prices:
+        highest_val = unique_prices[0][0]
+        threshold = highest_val * 0.05
+        unique_prices = [(n, t) for n, t in unique_prices if n >= threshold]
+
     # 4. Map the Prices precisely
     if len(unique_prices) >= 2:
-        # At least two distinct prices found:
-        # Highest = Original MRP (Sale Price)
-        # Lowest = Current Discounted Price (Discount Base Price)
+        # Highest = Original MRP (Sale Price / crossed-out price)
+        # Second-highest = Current actual price (Discount Base Price)
+        # We intentionally use [1] not [-1] so that if 3+ prices leak through,
+        # we don't accidentally grab a third stray price as the "discounted" one.
         p['Sale Price'] = unique_prices[0][1]
-        p['Discount Base Price'] = unique_prices[-1][1]
+        p['Discount Base Price'] = unique_prices[1][1]
     elif len(unique_prices) == 1:
         # Exactly one price found: product is not on discount
         single_price = unique_prices[0][1]
@@ -684,14 +705,32 @@ def fetch_product_details(url, existing_p, fetcher=None):
         # We must ABORT scraping this product so it doesn't appear in the sheet.
         return None
 
-    about_item = soup.select_one('#feature-bullets')
-    if about_item:
-        raw_desc = clean_text(about_item.get_text())[:2000]
-    else:
-        desc_el = soup.select_one(
-            '#productDescription, [class*="description"], [class*="Description"]'
-        )
-        raw_desc = clean_text(desc_el.get_text())[:2000] if desc_el else ''
+    # ── Description Extraction — multi-source, de-noised ─────────────────
+    raw_desc_parts = []
+
+    # Source 1: Feature bullets (#feature-bullets) — most info-dense
+    feature_el = soup.select_one('#feature-bullets')
+    if feature_el:
+        # Remove the "About this item" heading that Amazon always injects at the top
+        for hdr in feature_el.select('.a-declarative, h1, h2, h3, h4, [class*="heading"]'):
+            hdr.decompose()
+        txt = feature_el.get_text(separator='\n')
+        # Strip the literal text "About this item" if it survived as plain text
+        txt = re.sub(r'(?im)^\s*about\s+this\s+item\s*$', '', txt)
+        txt = clean_text(txt).strip()
+        if txt:
+            raw_desc_parts.append(txt)
+
+    # Source 2: Product description paragraph (#productDescription)
+    desc_el = soup.select_one('#productDescription')
+    if not desc_el:
+        desc_el = soup.select_one('#aplus_feature_div, #aplus, .aplus-module')
+    if desc_el:
+        txt = clean_text(desc_el.get_text(separator='\n')).strip()
+        if txt and txt not in ' '.join(raw_desc_parts):
+            raw_desc_parts.append(txt)
+
+    raw_desc = '\n\n'.join(raw_desc_parts)[:2000]
 
     if raw_desc:
         sanitized_desc, _desc_changes = compliance_sanitize_text(raw_desc)
@@ -1225,12 +1264,244 @@ def fetch_product_details(url, existing_p, fetcher=None):
     if not p.get('Main Image') and serp_main_image:
         p['Main Image'] = serp_main_image
     
-    return p
+    return (p, html) if return_html else p
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VARIANT EXTRACTION  (all shades / sizes on a single PDP — NO extra fetches)
+# ─────────────────────────────────────────────────────────────────────────────
+# Amazon's internal dimension key → friendly display label
+_VARIANT_DIM_LABELS = {
+    'color_name': 'Color',   'colour_name': 'Color',
+    'color': 'Color',        'colour': 'Color',
+    'shade': 'Shade',        'shade_name': 'Shade',
+    'size_name': 'Size',     'size': 'Size',
+    'flavor_name': 'Flavor', 'flavour_name': 'Flavor',
+    'scent_name': 'Scent',
+    'style_name': 'Style',   'pattern_name': 'Pattern',
+    'material_type': 'Material',
+    'edition': 'Edition',    'package_type': 'Package Type',
+    'count': 'Count',        'item_package_quantity': 'Package Quantity',
+}
+
+
+def _extract_variant_data(html: str, base_asin: str = '') -> list:
+    """Parse ALL variant ASIN/label pairs from the raw PDP HTML.
+
+    Works entirely on the raw string — no extra HTTP requests.
+
+    Returns a list of dicts:
+        [{"asin": "B0XXX", "option_type_1": "Color", "option_value_1": "Pink",
+                           "option_type_2": "Size",  "option_value_2": "30 ml"}, ...]
+
+    Returns [] if no variant data is found.
+    """
+    if not html:
+        return []
+
+    variants = []
+
+    # ─── Strategy 1: Mine asin_variation_values from raw HTML ─────────────
+    # Amazon embeds this JSON in a <script> block.  Rather than trying to
+    # parse the entire (nested) object — which always fails — we pull out
+    # individual ASIN entries with a targeted per-entry regex:
+    #   "B0XXXXXXXX": {"color_name": "Pink", "size_name": "30 ml"}
+    # The inner object is always a flat key:string map, so [^{}]+ is safe.
+    try:
+        # Only scan the neighbourhood of asin_variation_values
+        ctx = re.search(r'asin_variation_values', html)
+        if ctx:
+            window = html[max(0, ctx.start() - 200): ctx.start() + 500_000]
+
+            # --- Dimension names array (optional but improves label quality) ---
+            dims = []
+            dims_m = re.search(r'"dimensions"\s*:\s*\[([^\]]+)\]', window)
+            if dims_m:
+                dims = re.findall(r'"([^"]+)"', dims_m.group(1))
+
+            # --- Per-ASIN entries ----------------------------------------
+            # Match: "B0XXXXXXXX": { ... } where inner content has no braces
+            asin_entry_re = re.compile(
+                r'"([A-Z0-9]{10})"\s*:\s*\{([^{}]+)\}', re.S
+            )
+            seen = set()
+
+            for m in asin_entry_re.finditer(window):
+                asin = m.group(1)
+                if asin in seen:
+                    continue
+                seen.add(asin)
+
+                # Parse inner k→v pairs  (all values are strings)
+                props = dict(re.findall(r'"(\w+)"\s*:\s*"([^"]*)"', m.group(2)))
+                if not props:
+                    continue
+
+                ot1 = ov1 = ot2 = ov2 = ''
+
+                # Use the dimensions array if available; otherwise fall back
+                # to the first recognised beauty/colour dimension key.
+                if dims:
+                    for idx, dk in enumerate(dims[:2]):
+                        friendly = _VARIANT_DIM_LABELS.get(
+                            dk.lower(), dk.replace('_', ' ').title()
+                        )
+                        val = props.get(dk, '')
+                        if idx == 0:
+                            ot1, ov1 = friendly, val
+                        else:
+                            ot2, ov2 = friendly, val
+                else:
+                    for dk in ('color_name', 'colour_name', 'shade_name',
+                               'size_name', 'flavor_name', 'style_name'):
+                        if dk in props:
+                            ot1 = _VARIANT_DIM_LABELS.get(dk, dk.title())
+                            ov1 = props[dk]
+                            break
+
+                if ov1:  # Only include if we extracted at least a label
+                    variants.append({
+                        'asin': asin,
+                        'option_type_1': ot1, 'option_value_1': ov1,
+                        'option_type_2': ot2, 'option_value_2': ov2,
+                    })
+
+            if variants:
+                return variants
+    except Exception:
+        pass
+
+    # ─── Strategy 2: New Amazon JSON Structure (sortedDimValuesForAllDims) ────────
+    # Amazon has migrated many PDPs to a new React/Redux based frontend state.
+    # Structure: "sortedDimValuesForAllDims": { "color_name": [...], "size_name": [...] }
+    # Each key is a dimension type (color, size, flavor, etc.) — fully dynamic.
+    try:
+        if 'sortedDimValuesForAllDims' in html:
+            pos = html.find('sortedDimValuesForAllDims')
+            window = html[pos:pos+500_000]
+            
+            dims_re = re.compile(r'"([^"]+)"\s*:\s*\[(.*?)\]\}', re.S)
+            
+            # Collect per-ASIN data across ALL dimensions first
+            # asin_data = { asin: [(dim_name, label), ...] }
+            asin_data = {}
+            dim_order = []  # preserve order dimensions appear in JSON
+
+            for dim_match in dims_re.finditer(window):
+                dim_key = dim_match.group(1)
+                # Skip non-dimension keys that might match the regex
+                if not any(kw in dim_key.lower() for kw in (
+                    'color', 'colour', 'shade', 'size', 'flavor', 'flavour',
+                    'scent', 'style', 'pattern', 'material', 'edition',
+                    'package', 'count', 'quantity', 'name'
+                )):
+                    continue
+                dim_name = _VARIANT_DIM_LABELS.get(dim_key.lower(), dim_key.replace('_', ' ').title())
+                if dim_name not in dim_order:
+                    dim_order.append(dim_name)
+
+                items_str = dim_match.group(2)
+                items = re.split(r'\},\{', items_str)
+                
+                for item in items:
+                    asin_m = re.search(r'"defaultAsin"\s*:\s*"([A-Z0-9]{10})"', item)
+                    label_m = re.search(r'"dimensionValueDisplayText"\s*:\s*"([^"]+)"', item)
+                    
+                    if asin_m and label_m:
+                        asin = asin_m.group(1)
+                        label = label_m.group(1)
+                        if asin not in asin_data:
+                            asin_data[asin] = {}
+                        asin_data[asin][dim_name] = label
+
+            # Now build the variant list with up to 2 option dimensions
+            if asin_data:
+                for asin, dims_dict in asin_data.items():
+                    # Map the first two dimensions found for this ASIN
+                    dim_items = [(d, dims_dict[d]) for d in dim_order if d in dims_dict]
+                    ot1 = dim_items[0][0] if len(dim_items) > 0 else ''
+                    ov1 = dim_items[0][1] if len(dim_items) > 0 else ''
+                    ot2 = dim_items[1][0] if len(dim_items) > 1 else ''
+                    ov2 = dim_items[1][1] if len(dim_items) > 1 else ''
+
+                    if ov1:
+                        variants.append({
+                            'asin': asin,
+                            'option_type_1': ot1, 'option_value_1': ov1,
+                            'option_type_2': ot2, 'option_value_2': ov2,
+                        })
+            
+            if variants:
+                return variants
+    except Exception:
+        pass
+
+    # ─── Strategy 3: DOM swatch img alt texts (no JS required) ────────────
+    # Amazon renders each color swatch as an <li data-dp-url="...">
+    # with a child <img alt="Shade Name">.  These ARE in the static HTML.
+    try:
+        soup_tmp = BeautifulSoup(html, 'lxml')
+
+        # Detect dimension type from the variation heading label
+        dim_type = 'Color'
+        for head_sel in (
+            '#variation_color_name .a-form-label',
+            '#variation_colour_name .a-form-label',
+            '#variation_shade_name .a-form-label',
+            '#variation_size_name .a-form-label',
+        ):
+            el = soup_tmp.select_one(head_sel)
+            if el:
+                raw = el.get_text(strip=True).rstrip(':').strip().lower()
+                dim_type = _VARIANT_DIM_LABELS.get(raw, raw.title())
+                break
+
+        seen_asins = set()
+
+        for li in soup_tmp.select('li[data-dp-url], li.swatchAvailable'):
+            dp_url = li.get('data-dp-url', '')
+            asin_m = re.search(r'/dp/([A-Z0-9]{10})', dp_url)
+            asin = asin_m.group(1) if asin_m else ''
+
+            if asin and asin in seen_asins:
+                continue
+            if asin:
+                seen_asins.add(asin)
+
+            # Label = img alt → span text → title attr
+            label = ''
+            img = li.select_one('img')
+            if img:
+                label = img.get('alt', '').strip()
+            if not label:
+                sp = li.select_one('.twisterTextSpan, .a-button-text')
+                if sp:
+                    label = sp.get_text(strip=True)
+            if not label:
+                label = li.get('title', '') or li.get('aria-label', '')
+            label = label.strip()
+
+            if label:
+                variants.append({
+                    'asin': asin,
+                    'option_type_1': dim_type, 'option_value_1': label,
+                    'option_type_2': '',        'option_value_2': '',
+                })
+
+        if variants:
+            return variants
+    except Exception:
+        pass
+
+    return []
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DELIVERY DATE CHECKER (for pincode-based filtering)
 # ─────────────────────────────────────────────────────────────────────────────
+
 def _check_delivery(html_or_soup, pincode, max_days=4):
     """Check if a product can be delivered within `max_days` to the given pincode.
     
@@ -1368,66 +1639,123 @@ def _check_delivery(html_or_soup, pincode, max_days=4):
 # SINGLE PRODUCT PROCESSOR (used by ThreadPool)
 # ─────────────────────────────────────────────────────────────────────────────
 def _process_single_product(prod, job_fetcher, log_fn, pincode='', delivery_filter=False, job_ref=None):
-    """Process a single product: Fast Fetch -> Gemini AI -> Output"""
+    """Process a single product: Fast Fetch -> Gemini AI -> Output.
+
+    Returns a LIST of product dicts:
+      - element 0  : the base product (fully Gemini-enriched)
+      - elements 1+: sibling variant rows (cloned, option columns filled in)
+    Returns [] if the base product is unavailable / cancelled.
+    """
     if job_ref and job_ref.get('cancelled'):
-        return None
+        return []
 
     pname = prod.get('Product Name', '')
     product_url = prod.get('_product_url')
 
-    # ── PHASE 1: PDP Enrichment (may fail — that's OK) ──
+    # ── PHASE 1: PDP Enrichment ───────────────────────────────────────────────
+    # fetch_product_details now returns (product, html) so we can reuse the
+    # validated PDP HTML for variant extraction — zero extra HTTP requests.
+    base_html = None
     try:
-        if job_ref and job_ref.get('cancelled'): return None
+        if job_ref and job_ref.get('cancelled'): return []
         if product_url:
-            log_fn(f"🔎 Deep scraping: {pname[:40]}...")
-            prod = fetch_product_details(product_url, prod, fetcher=job_fetcher)
-            
+            log_fn(f"Deep scraping: {pname[:40]}...")
+
+            result = fetch_product_details(product_url, prod, fetcher=job_fetcher, return_html=True)
+            if isinstance(result, tuple):
+                prod, base_html = result
+            else:
+                prod = result  # backward-compat safety
+
             if not prod:
-                log_fn(f"⚠️ Skipped {pname[:30][:20]}... (Out of stock / Unavailable)", 'warn')
-                return None
-            
+                log_fn(f"Skipped {pname[:30]}... (Out of stock / Unavailable)", 'warn')
+                return []
+
             # ── DELIVERY FILTER CHECK ──
             if delivery_filter and pincode:
-                # Re-fetch PDP with pincode cookie for delivery info
-                pdp_html = fetch_pdp_fast(product_url, pincode=pincode)
-                if pdp_html:
-                    is_deliverable = _check_delivery(pdp_html, pincode)
+                # Re-use base_html if it exists, otherwise do a pincode-aware fetch
+                delivery_html = base_html or fetch_pdp_fast(product_url, pincode=pincode)
+                if delivery_html:
+                    is_deliverable = _check_delivery(delivery_html, pincode)
                     if not is_deliverable:
-                        log_fn(f"🚚 Skipped {pname[:35]}... (Not deliverable in 2-4 days to {pincode})", 'warn')
-                        return 'DELIVERY_SKIP'  # Special sentinel to count delivery skips
+                        log_fn(f"Skipped {pname[:35]}... (Not deliverable to {pincode})", 'warn')
+                        return 'DELIVERY_SKIP'
     except Exception as pdp_err:
-        log_fn(f"⚠️ PDP enrichment failed for {pname[:30]}: {pdp_err}. Continuing with basic data.", 'warn')
+        log_fn(f"PDP enrichment failed for {pname[:30]}: {pdp_err}. Continuing with basic data.", 'warn')
 
-    # ── PHASE 2: Compliance + Gemini LLM (ALWAYS runs, regardless of PDP success) ──
+    # ── PHASE 2: Compliance + Gemini LLM ─────────────────────────────────────
     try:
-        if job_ref and job_ref.get('cancelled'): return None
-        # ── COUPANG COMPLIANCE DEEP GATE: Sanitize all text fields ──
+        if job_ref and job_ref.get('cancelled'): return []
         prod, compliance_changes = compliance_sanitize_product(prod)
         if compliance_changes:
-            changed_fields = ', '.join(compliance_changes.keys())
-            log_fn(f"🛡️ Compliance fix ({changed_fields}): {pname[:30]}...")
-        
-        if job_ref and job_ref.get('cancelled'): return None
-        
-        # Gemini LLM Sanitization and Precision Extractor — MANDATORY for every product
-        log_fn(f"✨ Perfecting with Gemini: {pname[:30]}...")
+            log_fn(f"Compliance fix ({', '.join(compliance_changes.keys())}): {pname[:30]}...")
+
+        if job_ref and job_ref.get('cancelled'): return []
+
+        log_fn(f"Perfecting with Gemini: {pname[:30]}...")
         prod = sanitize_product_data(prod)
 
-        # ── POST-GEMINI COMPLIANCE RE-PASS ──────────────────────────────────
-        # Gemini rewrites Product Name, Description, and Keywords from scratch.
-        # This re-pass guarantees no banned word survives in Gemini-generated text.
         prod, _post_changes = compliance_sanitize_product(prod)
         if _post_changes:
-            log_fn(f"🛡️ Post-Gemini fix ({', '.join(_post_changes.keys())}): {pname[:30]}...")
+            log_fn(f"Post-Gemini fix ({', '.join(_post_changes.keys())}): {pname[:30]}...")
     except Exception as llm_err:
-        log_fn(f"⚠️ LLM processing failed for {pname[:30]}: {llm_err}. Using scraped data.", 'warn')
-        # Gemini failed — still sanitize whatever scraped data we have
+        log_fn(f"LLM processing failed for {pname[:30]}: {llm_err}. Using scraped data.", 'warn')
         try:
             prod, _ = compliance_sanitize_product(prod)
         except Exception:
             pass
 
-    return prod
+    # ── PHASE 3: Variant Row Generation (CLONE — no extra HTTP fetches) ───────
+    # Extract all variant label/ASIN pairs from the HTML we already downloaded.
+    result_rows = [prod]
+
+    if base_html and isinstance(base_html, str):
+        base_asin = prod.get('SKU', '')
+        variant_data = _extract_variant_data(base_html, base_asin)
+
+        if variant_data:
+            log_fn(f"Found {len(variant_data)} variant(s) — adding as rows (no extra fetch)...")
+
+        # Give the base product its Option Type/Value
+        base_var = next((v for v in variant_data if v['asin'] == base_asin), None)
+        if base_var:
+            prod['Option Type 1']  = base_var.get('option_type_1', '')
+            prod['Option Value 1'] = base_var.get('option_value_1', '')
+            prod['Option Type 2']  = base_var.get('option_type_2', '')
+            prod['Option Value 2'] = base_var.get('option_value_2', '')
+
+        for var_info in variant_data:
+            if job_ref and job_ref.get('cancelled'):
+                break
+
+            var_asin = var_info.get('asin', '')
+            if not var_asin or var_asin == base_asin:
+                continue
+
+            # Clone base product and only overwrite the variant-specific fields
+            var_prod = prod.copy()
+            var_prod['Option Type 1']  = var_info.get('option_type_1', '')
+            var_prod['Option Value 1'] = var_info.get('option_value_1', '')
+            var_prod['Option Type 2']  = var_info.get('option_type_2', '')
+            var_prod['Option Value 2'] = var_info.get('option_value_2', '')
+
+            # Give the variant its own ASIN/SKU so each row is uniquely identified
+            var_prod['SKU'] = var_asin
+            var_prod['Model Number'] = var_asin + '-1'
+            var_prod['Barcode'] = ''
+            var_prod['_product_url'] = f"https://www.amazon.in/dp/{var_asin}"
+
+            log_fn(f"  + Fetching variant details: '{var_info.get('option_value_1', var_asin)}'...")
+            var_fetched = fetch_product_details(var_prod['_product_url'], var_prod, fetcher=None, fast_only=True)
+            
+            if var_fetched:
+                result_rows.append(var_fetched)
+            else:
+                log_fn(f"  - Variant '{var_info.get('option_value_1', var_asin)}' skipped (Out of stock or fetch failed)")
+            
+            time.sleep(1.0)  # Polite delay to prevent Amazon PerimeterX bot detection
+
+    return result_rows
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1468,7 +1796,9 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
         print(f"[{job_id}] {msg}")
 
     try:
-        all_products, page = [], 1
+        all_products = []
+        base_products_collected = 0
+        page = 1
         seen_skus = set()
         sort_strategies = [None, 'price-asc-rank', 'price-desc-rank', 'review-rank', 'date-desc-rank']
         current_sort_idx = 0
@@ -1496,7 +1826,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
             log(f'❌ {job["error"]}', 'error')
             return
 
-        while len(all_products) < max_products:
+        while base_products_collected < max_products:
             # Final explicit Cancellation Check to break main loop completely
             if job.get('cancelled'):
                 break
@@ -1655,7 +1985,7 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
             scraped_names_bulk = db.get_scraped_names(page_names)
 
             for prod in products:
-                if len(all_products) + len(candidates) >= max_products:
+                if base_products_collected + len(candidates) >= max_products:
                     break
                 
                 sku = prod.get('SKU')
@@ -1696,49 +2026,61 @@ def scrape_job(job_id, jobs, base_url, keyword, max_products, outputs_dir, pinco
                     delivery_skipped_page = 0
                     for future in as_completed(futures):
                         try:
-                            enriched = future.result()
+                            enriched_result = future.result()
                             # Handle delivery filter sentinel
-                            if enriched == 'DELIVERY_SKIP':
+                            if enriched_result == 'DELIVERY_SKIP':
                                 delivery_skipped_page += 1
                                 job['delivery_skipped'] = job.get('delivery_skipped', 0) + 1
                                 continue
-                            if enriched:
+                            # Normalise: _process_single_product returns a list, but
+                            # guard against old-style None / dict returns just in case.
+                            if enriched_result is None:
+                                continue
+                            if isinstance(enriched_result, dict):
+                                enriched_result = [enriched_result]
+                            
+                            # Increment base product counter only once per base product processed
+                            if enriched_result and len(enriched_result) > 0:
+                                with _products_lock:
+                                    base_products_collected += 1
+                                    added += 1
+
+                            for enriched in enriched_result:
+                                if not enriched:
+                                    continue
                                 # Fix: default to '' instead of None for Product URL
                                 enriched['Product URL'] = enriched.pop('_product_url', '') or ''
                                 enriched.pop('_raw_specs', None)
-                                
+
                                 # Clean up internal compliance metadata (not exported to Excel)
                                 compliance_notes = enriched.pop('_compliance_changes', None)
                                 if compliance_notes:
                                     job['compliance_fixed'] = job.get('compliance_fixed', 0) + 1
-                                
+
                                 # Thread-safe product list mutation & job state update
                                 with _products_lock:
                                     all_products.append(enriched)
                                     product_count = len(all_products)
-                                    # Update job products inside lock to prevent partial reads
                                     job['products'] = list(all_products)
-                                
-                                # Update job stats (atomic assignments are thread-safe in CPython)
+
+                                # Update job stats
                                 elapsed = time.time() - start_time
-                                avg_time = elapsed / product_count
-                                rem = max_products - product_count
+                                avg_time = elapsed / max(1, base_products_collected)
+                                rem = max_products - base_products_collected
                                 job['eta_seconds'] = int(max(0, avg_time * rem))
                                 job['elapsed_seconds'] = int(elapsed)
                                 job['products_per_min'] = round(product_count / (elapsed / 60), 1) if elapsed > 0 else 0
                                 job['success_count'] = job.get('success_count', 0) + 1
-                                
-                                
-                                added += 1
                         except Exception as fut_err:
                             job['fail_count'] = job.get('fail_count', 0) + 1
-                            log(f"⚠️ Product processing failed: {fut_err}", 'warn')
+                            log(f"Product processing failed: {fut_err}", 'warn')
+
 
             delivery_skip_msg = f", 🚚{delivery_skipped_page} delivery-filtered" if delivery_filter and delivery_skipped_page > 0 else ''
             db_skip_msg = f", 💽{db_skipped_page} already-scraped" if db_skipped_page > 0 else ''
             brand_skip_msg = f", 🏷️{brand_skipped_page} brand-mismatch" if brand_skipped_page > 0 else ''
-            log(f"✅ Page {page}: +{added} new, ⏭️{skipped} skipped{db_skip_msg}{brand_skip_msg}{delivery_skip_msg}  (total {len(all_products)}/{max_products})", 'success')
-            job['progress'] = int(min(len(all_products) / max_products * 85, 85))
+            log(f"✅ Page {page}: +{added} new base products (total {len(all_products)} rows), ⏭️{skipped} skipped{db_skip_msg}{brand_skip_msg}{delivery_skip_msg}", 'success')
+            job['progress'] = int(min(base_products_collected / max_products * 85, 85))
             job['found']    = len(all_products)
             job['pages_scraped'] = page
 

@@ -304,3 +304,68 @@ def get_data(jid):
         return jsonify({'error': 'Not found'}), 404
     products = job.get('products', [])
     return jsonify({'products': products, 'total': len(products)})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DELETE JOB PRODUCTS FROM DB — Lets the user undo a save if download failed
+# ─────────────────────────────────────────────────────────────────────────────
+@app.route('/api/delete-job-products/<jid>', methods=['POST'])
+def delete_job_products(jid):
+    """Delete the current job's products from the database.
+
+    Accepts optional JSON body:
+        { "sku_list": ["B0XXX", ...] }   — delete only this subset
+    If no body / empty sku_list, deletes ALL products in the job.
+
+    Returns:
+        { "deleted": N, "preview": [...first 30 names...], "error": null }
+    """
+    if not re.match(r'^[a-f0-9\-]{8}$', jid):
+        return jsonify({'error': 'Invalid job ID'}), 400
+    job = jobs.get(jid)
+    if not job:
+        return jsonify({'error': 'Not found'}), 404
+
+    products = job.get('products', [])
+    if not products:
+        return jsonify({'error': 'No products in this job to delete'}), 404
+
+    # Determine which SKUs to delete
+    body = request.get_json(silent=True) or {}
+    requested_skus = body.get('sku_list', [])
+
+    if requested_skus:
+        # Validate: only delete SKUs that actually belong to this job
+        job_skus = {p.get('SKU') for p in products if p.get('SKU')}
+        sku_list = [s for s in requested_skus if s in job_skus]
+    else:
+        sku_list = [p.get('SKU') for p in products if p.get('SKU')]
+
+    if not sku_list:
+        return jsonify({'error': 'No valid SKUs found to delete'}), 400
+
+    # Build a name preview (up to 30 items) for the confirmation UI
+    sku_set = set(sku_list)
+    preview = [
+        {'sku': p.get('SKU', ''), 'name': p.get('Product Name', ''), 'brand': p.get('Brand', '')}
+        for p in products
+        if p.get('SKU') in sku_set
+    ][:30]
+
+    deleted, err = db.delete_products_by_skus(sku_list)
+
+    if err:
+        return jsonify({'error': f'Database delete failed: {err}', 'deleted': 0, 'preview': preview}), 500
+
+    # Mark the job as no longer saved so re-downloads won't be skipped as dupes
+    job['_db_saved'] = False
+    job['db_saved_count'] = max(0, job.get('db_saved_count', 0) - deleted)
+
+    return jsonify({
+        'success': True,
+        'deleted': deleted,
+        'total_in_job': len(sku_list),
+        'preview': preview,
+        'message': f'Successfully removed {deleted} product(s) from the database.'
+    })
+
