@@ -6,11 +6,23 @@ import os
 import ipaddress
 from urllib.parse import urlparse
 
-from flask import request, jsonify, send_file
+from flask import request, jsonify, send_file, session, redirect, url_for
+from functools import wraps
 from . import app, jobs, OUTPUTS_DIR, limiter
 from .scraper import scrape_job
 from .excel_utils import build_excel
 from . import db
+
+# ── AUTHENTICATION HELPERS ───────────────────────────────────────────────────
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            if request.path.startswith('/api/'):
+                return jsonify({'error': 'Unauthorized', 'login_required': True}), 401
+            return redirect(url_for('login_page'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECURITY: Domain Allowlist (SSRF Prevention)
@@ -96,12 +108,51 @@ def rate_limit_handler(e):
     }), 429
 
 
+@app.after_request
+def add_header(response):
+    """Force prevent caching of all pages to ensure auth checks on back button."""
+    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
+
+
+# ── AUTH ROUTES ─────────────────────────────────────────────────────────────
+@app.route('/login', methods=['GET'])
+def login_page():
+    if session.get('logged_in'):
+        return redirect(url_for('index'))
+    return send_file('static/login.html')
+
+@app.route('/api/login', methods=['POST'])
+def login_api():
+    data = request.json or {}
+    username = data.get('username')
+    password = data.get('password')
+    
+    expected_user = os.getenv("DASHBOARD_USERNAME", "admin")
+    expected_pass = os.getenv("DASHBOARD_PASSWORD", "password123")
+    
+    if username == expected_user and password == expected_pass:
+        session['logged_in'] = True
+        return jsonify({'success': True})
+    
+    return jsonify({'success': False, 'error': 'Invalid username or password'}), 401
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login_page'))
+
+
 @app.route('/')
+@login_required
 def index():
     return send_file('static/index.html')
 
 
 @app.route('/api/scrape', methods=['POST'])
+@login_required
 @limiter.limit("5 per minute")
 def start_scrape():
     # Content-Type validation
@@ -180,7 +231,14 @@ def start_scrape():
     return jsonify({'job_id': jid})
 
 
+@app.route('/api/status/check')
+@login_required
+def check_auth():
+    return jsonify({'authenticated': True})
+
+
 @app.route('/api/status/<jid>')
+@login_required
 def get_status(jid):
     # Sanitize job ID to prevent path traversal
     if not re.match(r'^[a-f0-9\-]{8}$', jid):
@@ -191,6 +249,7 @@ def get_status(jid):
 
 
 @app.route('/api/download/<jid>')
+@login_required
 def download(jid):
     if not re.match(r'^[a-f0-9\-]{8}$', jid):
         return jsonify({'error': 'Invalid job ID'}), 400
@@ -214,6 +273,7 @@ def download(jid):
 # MID-SCRAPE PARTIAL DOWNLOAD — Export Excel from products scraped so far
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/api/download-partial/<jid>')
+@login_required
 def download_partial(jid):
     if not re.match(r'^[a-f0-9\-]{8}$', jid):
         return jsonify({'error': 'Invalid job ID'}), 400
@@ -245,6 +305,7 @@ def download_partial(jid):
 # SAVE TO DB — Only triggered when user clicks Download (on-demand)
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/api/save-to-db/<jid>', methods=['POST'])
+@login_required
 def save_to_db(jid):
     if not re.match(r'^[a-f0-9\-]{8}$', jid):
         return jsonify({'error': 'Invalid job ID'}), 400
@@ -281,6 +342,7 @@ def save_to_db(jid):
 # CANCEL JOB — Gracefully stop a running scrape
 # ─────────────────────────────────────────────────────────────────────────────
 @app.route('/api/cancel/<jid>', methods=['POST'])
+@login_required
 def cancel_job(jid):
     if not re.match(r'^[a-f0-9\-]{8}$', jid):
         return jsonify({'error': 'Invalid job ID'}), 400
@@ -296,6 +358,7 @@ def cancel_job(jid):
 
 
 @app.route('/api/data/<jid>')
+@login_required
 def get_data(jid):
     if not re.match(r'^[a-f0-9\-]{8}$', jid):
         return jsonify({'error': 'Invalid job ID'}), 400
