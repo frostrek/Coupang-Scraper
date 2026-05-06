@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>DataHarvest — E-Commerce Product Scraper</title>
 <meta name="description" content="Professional e-commerce product scraper. Extract product data from Amazon and export to Excel.">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -121,7 +124,7 @@
     display: grid;
     place-items: center;
     flex-shrink: 0;
-    color: #fff;
+    color: var(--surface);
     font-size: 18px;
     box-shadow: var(--shadow-md);
     transition: transform 0.2s;
@@ -386,7 +389,7 @@
   .btn-primary {
     width: 100%;
     background: var(--primary);
-    color: #fff;
+    color: var(--bg);
     padding: 14px 28px;
     box-shadow: var(--shadow-md);
   }
@@ -1003,6 +1006,9 @@
       <button class="theme-toggle-btn" id="clear-data-btn" onclick="clearAllData()" title="Clear Cached Data" style="background:var(--error-bg);border-color:var(--error-border);color:var(--error);">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
       </button>
+      <button class="theme-toggle-btn" onclick="location.href='/logout'" title="Logout" style="background:var(--surface3); border-color:var(--border2); color:var(--text2);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>
       <button class="theme-toggle-btn" id="theme-toggle" onclick="toggleTheme()" title="Toggle Dark Mode">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
       </button>
@@ -1510,6 +1516,10 @@ async function pollStatus() {
   try {
     const res = await fetch(`/api/status/${currentJobId}`);
     if (!res.ok) {
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
       pollFailCount++;
       if (pollFailCount >= 8) {
         clearInterval(pollInterval);
@@ -1721,6 +1731,10 @@ async function fetchTableData() {
   if (!currentJobId) return;
   try {
     const res = await fetch(`/api/data/${currentJobId}`);
+    if (res.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
     const data = await res.json();
     if (data.products) { allProducts = data.products; filteredProducts = [...allProducts]; }
   } catch (e) { console.error('Failed to fetch table data:', e); }
@@ -1944,11 +1958,27 @@ function hide(id) { document.getElementById(id).style.display = 'none'; }
 // Init ETA on load
 updateETA();
 
+// ── BACK BUTTON CACHE GUARD ──────────────────────────────────────────────
+// This prevents users from seeing the dashboard via the back button after logout
+window.addEventListener('pageshow', function(event) {
+    if (event.persisted || (window.performance && window.performance.navigation.type === 2)) {
+        // Page was loaded from cache (e.g. back button)
+        // Check session status by making a small API call
+        fetch('/api/status/check').then(res => {
+            if (res.status === 401) window.location.href = '/login';
+        }).catch(() => {});
+    }
+});
+
 // Resume Job on Refresh — HARDENED to prevent stale-data issues
 document.addEventListener("DOMContentLoaded", () => {
     const savedJobId = localStorage.getItem('scrapling_currentJobId');
     if (savedJobId) {
         fetch(`/api/status/${savedJobId}`).then(res => {
+            if (res.status === 401) {
+                window.location.href = '/login';
+                return;
+            }
             if (!res.ok) {
                 // Server restarted or job expired — clean up silently
                 localStorage.removeItem('scrapling_currentJobId');

@@ -4,6 +4,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 app = Flask(__name__, static_folder='static', static_url_path='')
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "default-secret-key-12345")
 
 limiter = Limiter(
     get_remote_address,
